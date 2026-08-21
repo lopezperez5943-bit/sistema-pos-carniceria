@@ -8,7 +8,7 @@ import time
 st.set_page_config(page_title="Punto de Venta - Carnicería", page_icon="🥩", layout="wide")
 
 # 1. CONEXIÓN AL MOTOR LOCAL (o en la nube si ya lo cambiaste)
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://api-carniceria-bdoz.onrender.com"
 
 # --- 2. MEMORIA DE SESIÓN (LOGIN) ---
 if "logged_in" not in st.session_state:
