@@ -103,14 +103,39 @@ else:
         else:
             st.warning("No hay productos registrados.")
 
-    # ACORDEÓN 2: EDITAR PRECIOS (¡NUEVO Y CORREGIDO!)
+    # --- PESTAÑA 2: INVENTARIO (CORREGIDA AL 100%) ---
+    with tab2:
+        st.header("Catálogo y Existencias")
+        
+        # ACORDEÓN 1: NUEVO PRODUCTO
+        with st.expander("➕ Agregar Nuevo Producto"):
+            with st.form("form_nuevo_producto"):
+                nombre = st.text_input("Nombre del Producto:")
+                categoria = st.selectbox("Categoría:", [("Res", 1), ("Cerdo", 2), ("Pollo", 3), ("Procesados", 4)], format_func=lambda x: x[0])
+                c1, c2, c3 = st.columns(3)
+                with c1: precio_c = st.number_input("Costo Proveedor por KG ($):", min_value=0.0, step=1.0)
+                with c2: precio_v = st.number_input("Precio al Público por KG ($):", min_value=0.0, step=1.0)
+                with c3: stock_ini = st.number_input("Kilos iniciales (KG):", min_value=0.0, step=0.001, format="%.3f")
+                    
+                if st.form_submit_button("Guardar Producto"):
+                    payload_prod = {"nombre": nombre, "id_categoria": categoria[1], "precio_compra": precio_c, "precio_venta": precio_v, "stock_actual": stock_ini, "unidad_medida": "KG"}
+                    try:
+                        res_post = requests.post(f"{API_URL}/productos/", json=payload_prod)
+                        if "Error" in res_post.json(): st.error(f"Error: {res_post.json()['Detalle']}")
+                        else:
+                            st.success("¡Producto guardado!")
+                            time.sleep(1)
+                            st.rerun()
+                    except: st.error("Error de servidor.")
+        
+        # ACORDEÓN 2: EDITAR PRECIOS 
         with st.expander("✏️ Editar Precios de un Producto"):
             if productos and isinstance(productos, list):
                 opciones_edit = {f"#{p['id']} - {p['nombre']}": p for p in productos}
                 prod_edit_nombre = st.selectbox("Selecciona el producto a modificar:", list(opciones_edit.keys()), key="edit_box")
                 prod_data = opciones_edit[prod_edit_nombre]
                 
-                # TRUCO .get() para evitar el KeyError si el backend no manda el dato
+                # LA MAGIA ANTI-ERRORES ESTÁ AQUÍ
                 val_compra = float(prod_data.get('precio_compra') or 0.0)
                 val_venta = float(prod_data.get('precio_venta') or 0.0)
                 
@@ -134,6 +159,27 @@ else:
                         st.error("Error de conexión al servidor.")
             else:
                 st.info("Agrega productos primero para poder editarlos.")
+
+        st.subheader("Existencias Actuales")
+        if productos and isinstance(productos, list):
+            df = pd.DataFrame(productos)
+            try:
+                df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio Público ($)", "stock_actual": "Stock (KG)"})
+                st.dataframe(df[["id", "Producto", "Categoría", "Precio Público ($)", "Stock (KG)"]])
+            except: st.dataframe(df)
+            
+        st.divider()
+        st.subheader("⚠️ Eliminar Producto")
+        if productos and isinstance(productos, list):
+            opciones_del = {f"#{p['id']} - {p['nombre']}": p["id"] for p in productos}
+            prod_del = st.selectbox("Producto a eliminar:", list(opciones_del.keys()), key="del_box_2")
+            if st.button("🗑️ Borrar del Inventario"):
+                try:
+                    res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}").json()
+                    st.success("Producto eliminado")
+                    time.sleep(1)
+                    st.rerun()
+                except: st.error("Error.")
 
     # --- PESTAÑA 3: COMPRAS (Resurtir) ---
     with tab3:
