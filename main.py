@@ -240,3 +240,18 @@ def ver_reportes(periodo: str = "General"):
             }
     except Exception as e:
         return {"Error": str(e)}
+
+@app.put("/productos/{id_producto}")
+def actualizar_precios(id_producto: int, datos: dict):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                UPDATE productos 
+                SET precio_compra = :compra, precio_venta = :venta 
+                WHERE id_producto = :id
+            """), {"compra": datos["precio_compra"], "venta": datos["precio_venta"], "id": id_producto})
+            
+            conn.commit()
+            return {"mensaje": "Precios actualizados con éxito."}
+    except Exception as e:
+        return {"Error": str(e)}
