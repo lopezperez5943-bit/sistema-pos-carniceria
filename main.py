@@ -3,14 +3,8 @@ from sqlalchemy import create_engine, text
 from pydantic import BaseModel
 from typing import List
 
-# --- 1. CONFIGURACIÓN DE LA BASE DE DATOS (AHORA ES LOCAL) ---
-# Se comentó la conexión a Neon (Nube) para usar tu PC como servidor local
-# URL_BASE_DATOS_NUBE = "postgresql+psycopg2://neondb_owner:npg_x0MisXCT7IwP@..."
-
 # --- 1. CONEXIÓN A LA BASE DE DATOS EN LA NUBE (NEON) ---
 URL_BASE_DATOS = "postgresql://neondb_owner:npg_Ycz1MT9nRBtL@ep-patient-term-axk6tdgq-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require"
-
-engine = create_engine(URL_BASE_DATOS)
 
 engine = create_engine(
     URL_BASE_DATOS, 
@@ -18,26 +12,25 @@ engine = create_engine(
 )
 app = FastAPI(title="API POS - Carnicería")
 
-# --- 2. MODELOS DE DATOS (ADAPTADOS PARA GRAMOS Y MERMAS) ---
-
+# --- 2. MODELOS DE DATOS (MOLDES PYDANTIC) ---
 class CategoriaNueva(BaseModel):
     nombre: str
 
 class ProductoNuevo(BaseModel):
     nombre: str
     id_categoria: int
-    precio_compra: float  # Usamos float para aceptar decimales
+    precio_compra: float
     precio_venta: float
     stock_actual: float = 0.000 
     unidad_medida: str = "KG"
 
 class DetalleVenta(BaseModel):
     id_producto: int
-    cantidad: float       # Soporta vender 0.250 kg
+    cantidad: float
     precio_unitario: float
 
 class VentaNueva(BaseModel):
-    detalles: List[DetalleVenta] # Recibe una lista de varios productos en un solo ticket
+    detalles: List[DetalleVenta]
 
 class MermaNueva(BaseModel):
     id_producto: int
@@ -49,11 +42,22 @@ class GastoNuevo(BaseModel):
     monto: float
     descripcion: str = ""
 
+class CompraData(BaseModel):
+    id_producto: int
+    cantidad: float
+    costo_total: float
+    descripcion: str
+
+class PrecioData(BaseModel):
+    precio_compra: float
+    precio_venta: float
+
+
 # --- 3. RUTAS / ENDPOINTS DEL SISTEMA ---
 
 @app.get("/")
 def probar_conexion():
-    return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en local."}
+    return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
 # A) CATEGORÍAS
 @app.get("/categorias/")
@@ -89,61 +93,100 @@ def ver_productos():
     try:
         with engine.connect() as conexion:
             res = conexion.execute(text("""
-                SELECT p.id_producto, p.nombre, c.nombre as categoria, p.precio_venta, p.stock_actual 
+                SELECT p.id_producto, p.nombre, c.nombre as categoria, p.precio_venta, p.stock_actual, p.precio_compra 
                 FROM productos p
                 JOIN categorias c ON p.id_categoria = c.id_categoria
                 ORDER BY p.nombre ASC
             """))
-            return [{"id": f[0], "nombre": f[1], "categoria": f[2], "precio_venta": float(f[3]), "stock_actual": float(f[4])} for f in res.fetchall()]
+            return [{"id": f[0], "nombre": f[1], "categoria": f[2], "precio_venta": float(f[3]), "stock_actual": float(f[4]), "precio_compra": float(f[5])} for f in res.fetchall()]
     except Exception as e:
         return {"Error": str(e)}
 
-from sqlalchemy import text # Asegúrate de tener esto importado arriba si no lo tienes
-
-@app.post("/ventas/")
-def registrar_venta(datos: dict):
+@app.put("/productos/{id_producto}")
+def actualizar_precios(id_producto: int, datos: PrecioData):
     try:
         with engine.connect() as conn:
-            # 1. Crear el ticket de venta (iniciando el total en 0)
+            conn.execute(text("""
+                UPDATE productos 
+                SET precio_compra = :compra, precio_venta = :venta 
+                WHERE id_producto = :id_p
+            """), {"compra": datos.precio_compra, "venta": datos.precio_venta, "id_p": id_producto})
+            
+            conn.commit()
+            return {"mensaje": "Precios actualizados con éxito."}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.delete("/productos/{id_producto}")
+def eliminar_producto(id_producto: int):
+    try:
+        with engine.connect() as conexion:
+            conexion.execute(text("DELETE FROM productos WHERE id_producto = :id"), {"id": id_producto})
+            conexion.commit()
+            return {"mensaje": "Producto eliminado exitosamente."}
+    except Exception:
+        return {"Error": "No se puede eliminar porque ya tiene ventas o mermas asociadas."}
+
+# C) COMPRAS (RESURTIR MERCANCÍA)
+@app.post("/compras/")
+def registrar_compra(datos: CompraData):
+    try:
+        with engine.connect() as conn:
+            # Sumar stock 
+            conn.execute(text("""
+                UPDATE productos 
+                SET stock_actual = stock_actual + :cant 
+                WHERE id_producto = :id_p
+            """), {"cant": datos.cantidad, "id_p": datos.id_producto})
+            
+            # Registrar gasto
+            conn.execute(text("""
+                INSERT INTO gastos (categoria, monto, descripcion)
+                VALUES ('Flete / Viaje a Central de Abastos', :monto, :desc)
+            """), {"monto": datos.costo_total, "desc": datos.descripcion})
+            
+            conn.commit()
+            return {"mensaje": "Compra registrada con éxito."}
+    except Exception as e:
+        return {"Error": str(e)}
+
+# D) VENTAS
+@app.post("/ventas/")
+def registrar_venta(datos: VentaNueva):
+    try:
+        with engine.connect() as conn:
             res_venta = conn.execute(text("INSERT INTO ventas (total) VALUES (0) RETURNING id_venta;"))
             id_venta = res_venta.scalar()
-            
             total_venta = 0
             
-            # 2. Procesar cada producto en el carrito de compras
-            for detalle in datos["detalles"]:
-                id_prod = detalle["id_producto"]
-                cantidad_vendida = detalle["cantidad"]
-                precio = detalle["precio_unitario"]
+            for detalle in datos.detalles:
+                id_prod = detalle.id_producto
+                cantidad_vendida = detalle.cantidad
+                precio = detalle.precio_unitario
                 
                 subtotal = cantidad_vendida * precio
                 total_venta += subtotal
                 
-                # A) Guardar el registro en el detalle del ticket
                 conn.execute(text("""
                     INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario)
                     VALUES (:id_v, :id_p, :cant, :precio)
                 """), {"id_v": id_venta, "id_p": id_prod, "cant": cantidad_vendida, "precio": precio})
                 
-                # B) ¡LA PARTE QUE FALTABA! Descontar los kilos del inventario
                 conn.execute(text("""
                     UPDATE productos 
                     SET stock_actual = stock_actual - :cant 
                     WHERE id_producto = :id_p
                 """), {"cant": cantidad_vendida, "id_p": id_prod})
             
-            # 3. Actualizar el costo total final del ticket
             conn.execute(text("UPDATE ventas SET total = :tot WHERE id_venta = :id_v"), 
                          {"tot": total_venta, "id_v": id_venta})
             
-            # 4. Confirmar y guardar los cambios en Neon
             conn.commit()
-            
             return {"mensaje": "Venta exitosa e inventario actualizado", "id_venta": id_venta}
     except Exception as e:
         return {"Error": str(e)}
 
-# D) CONTROL ESTRICTO DE MERMAS
+# E) CONTROL ESTRICTO DE MERMAS
 @app.post("/mermas/")
 def registrar_merma(merma: MermaNueva):
     try:
@@ -157,7 +200,6 @@ def registrar_merma(merma: MermaNueva):
             })
             id_m = res.fetchone()[0]
             
-            # Descontamos el hueso/grasa del stock principal
             conexion.execute(text("UPDATE productos SET stock_actual = stock_actual - :peso WHERE id_producto = :prod"), 
                              {"peso": merma.peso_merma, "prod": merma.id_producto})
             conexion.commit()
@@ -166,7 +208,7 @@ def registrar_merma(merma: MermaNueva):
     except Exception as e:
         return {"Error": "No se pudo registrar la merma", "Detalle": str(e)}
     
-# E) CONTROL DE GASTOS
+# F) CONTROL DE GASTOS
 @app.post("/gastos/")
 def registrar_gasto(gasto: GastoNuevo):
     try:
@@ -184,19 +226,7 @@ def registrar_gasto(gasto: GastoNuevo):
             return {"mensaje": "Gasto guardado con éxito", "id_gasto": res.fetchone()[0]}
     except Exception as e:
         return {"Error": "No se pudo guardar el gasto", "Detalle": str(e)}
-    
-# F) ELIMINAR PRODUCTOS
-@app.delete("/productos/{id_producto}")
-def eliminar_producto(id_producto: int):
-    try:
-        with engine.connect() as conexion:
-            conexion.execute(text("DELETE FROM productos WHERE id_producto = :id"), {"id": id_producto})
-            conexion.commit()
-            return {"mensaje": "Producto eliminado exitosamente."}
-    except Exception:
-        return {"Error": "No se puede eliminar porque ya tiene ventas o mermas asociadas."}
 
-# G) VER HISTORIAL DE GASTOS
 @app.get("/gastos/")
 def ver_gastos():
     try:
@@ -206,12 +236,11 @@ def ver_gastos():
     except Exception:
         return []
 
-# H) REPORTES Y GRÁFICAS FINANCIERAS (AHORA CON FILTRO DE TIEMPO)
+# G) REPORTES Y GRÁFICAS FINANCIERAS
 @app.get("/reportes/")
 def ver_reportes(periodo: str = "General"):
     try:
         with engine.connect() as conexion:
-            # 1. Configurar el filtro de fecha según lo que pida la pantalla
             filtro = ""
             if periodo == "Hoy":
                 filtro = "WHERE fecha >= CURRENT_DATE"
@@ -220,15 +249,12 @@ def ver_reportes(periodo: str = "General"):
             elif periodo == "Mes":
                 filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '30 days'"
 
-            # 2. Consultas con el filtro aplicado
             ventas = conexion.execute(text(f"SELECT total FROM ventas {filtro}")).fetchall()
             gastos = conexion.execute(text(f"SELECT monto, categoria FROM gastos {filtro}")).fetchall()
             
-            # Para las mermas, especificamos que la fecha es de la tabla mermas (m)
             filtro_mermas = filtro.replace("fecha", "m.fecha")
             mermas = conexion.execute(text(f"SELECT m.peso_merma, p.precio_compra FROM mermas m JOIN productos p ON m.id_producto = p.id_producto {filtro_mermas}")).fetchall()
             
-            # 3. Sumatorias
             t_ventas = sum([float(v[0]) for v in ventas]) if ventas else 0.0
             t_gastos = sum([float(g[0]) for g in gastos]) if gastos else 0.0
             t_mermas = sum([float(m[0]) * float(m[1]) for m in mermas]) if mermas else 0.0
@@ -238,20 +264,5 @@ def ver_reportes(periodo: str = "General"):
                 "ganancia_neta": t_ventas - t_gastos - t_mermas,
                 "detalle_gastos": [{"categoria": g[1], "monto": float(g[0])} for g in gastos]
             }
-    except Exception as e:
-        return {"Error": str(e)}
-
-@app.put("/productos/{id_producto}")
-def actualizar_precios(id_producto: int, datos: dict):
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE productos 
-                SET precio_compra = :compra, precio_venta = :venta 
-                WHERE id_producto = :id
-            """), {"compra": datos["precio_compra"], "venta": datos["precio_venta"], "id": id_producto})
-            
-            conn.commit()
-            return {"mensaje": "Precios actualizados con éxito."}
     except Exception as e:
         return {"Error": str(e)}
