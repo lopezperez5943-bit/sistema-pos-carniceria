@@ -173,13 +173,27 @@ else:
         if productos and isinstance(productos, list):
             opciones_del = {f"#{p['id']} - {p['nombre']}": p["id"] for p in productos}
             prod_del = st.selectbox("Producto a eliminar:", list(opciones_del.keys()), key="del_box_2")
+            
             if st.button("🗑️ Borrar del Inventario"):
                 try:
-                    res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}").json()
-                    st.success("Producto eliminado")
-                    time.sleep(1)
-                    st.rerun()
-                except: st.error("Error.")
+                    res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}")
+                    datos_res = res_del.json()
+                    
+                    # 1. Revisamos si el Cerebro nos mandó un mensaje de Error (ej. producto en uso)
+                    if "Error" in datos_res:
+                        st.error(f"No se puede borrar el producto porque ya tiene ventas o movimientos registrados. (Protección contable).")
+                    
+                    # 2. Si todo salió bien, mostramos éxito y recargamos
+                    elif res_del.status_code == 200:
+                        st.success("¡Producto eliminado correctamente!")
+                        time.sleep(1)
+                        st.rerun()
+                        
+                    else:
+                        st.error("Ocurrió un problema desconocido al eliminar.")
+                        
+                except Exception as e: # Al poner 'Exception as e', ya no choca con el st.rerun()
+                    st.error("Error de conexión con el servidor.")
 
     # --- PESTAÑA 3: COMPRAS (Resurtir) ---
     with tab3:
