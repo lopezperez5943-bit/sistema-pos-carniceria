@@ -67,7 +67,7 @@ else:
     try:
         res_prod = requests.get(f"{API_URL}/productos/")
         productos = res_prod.json()
-    except:
+    except Exception as e:
         productos = []
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🛒 Venta", "🥩 Inventario", "📦 Compras (Resurtir)", "🗑️ Mermas", "💸 Gastos", "📊 Reportes"])
@@ -103,7 +103,7 @@ else:
         else:
             st.warning("No hay productos registrados.")
 
-    # --- PESTAÑA 2: INVENTARIO (CORREGIDA AL 100%) ---
+    # --- PESTAÑA 2: INVENTARIO ---
     with tab2:
         st.header("Catálogo y Existencias")
         
@@ -121,12 +121,14 @@ else:
                     payload_prod = {"nombre": nombre, "id_categoria": categoria[1], "precio_compra": precio_c, "precio_venta": precio_v, "stock_actual": stock_ini, "unidad_medida": "KG"}
                     try:
                         res_post = requests.post(f"{API_URL}/productos/", json=payload_prod)
-                        if "Error" in res_post.json(): st.error(f"Error: {res_post.json()['Detalle']}")
+                        if "Error" in res_post.json(): 
+                            st.error(f"Error: {res_post.json()['Detalle']}")
                         else:
                             st.success("¡Producto guardado!")
                             time.sleep(1)
                             st.rerun()
-                    except: st.error("Error de servidor.")
+                    except Exception as e: 
+                        st.error("Error de servidor.")
         
         # ACORDEÓN 2: EDITAR PRECIOS 
         with st.expander("✏️ Editar Precios de un Producto"):
@@ -135,7 +137,6 @@ else:
                 prod_edit_nombre = st.selectbox("Selecciona el producto a modificar:", list(opciones_edit.keys()), key="edit_box")
                 prod_data = opciones_edit[prod_edit_nombre]
                 
-                # LA MAGIA ANTI-ERRORES ESTÁ AQUÍ
                 val_compra = float(prod_data.get('precio_compra') or 0.0)
                 val_venta = float(prod_data.get('precio_venta') or 0.0)
                 
@@ -155,7 +156,7 @@ else:
                             st.rerun()
                         else:
                             st.error("Error al actualizar.")
-                    except:
+                    except Exception as e:
                         st.error("Error de conexión al servidor.")
             else:
                 st.info("Agrega productos primero para poder editarlos.")
@@ -166,7 +167,8 @@ else:
             try:
                 df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio Público ($)", "stock_actual": "Stock (KG)"})
                 st.dataframe(df[["id", "Producto", "Categoría", "Precio Público ($)", "Stock (KG)"]])
-            except: st.dataframe(df)
+            except Exception as e: 
+                st.dataframe(df)
             
         st.divider()
         st.subheader("⚠️ Eliminar Producto")
@@ -179,20 +181,16 @@ else:
                     res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}")
                     datos_res = res_del.json()
                     
-                    # 1. Revisamos si el Cerebro nos mandó un mensaje de Error (ej. producto en uso)
                     if "Error" in datos_res:
                         st.error(f"No se puede borrar el producto porque ya tiene ventas o movimientos registrados. (Protección contable).")
-                    
-                    # 2. Si todo salió bien, mostramos éxito y recargamos
                     elif res_del.status_code == 200:
                         st.success("¡Producto eliminado correctamente!")
                         time.sleep(1)
                         st.rerun()
-                        
                     else:
                         st.error("Ocurrió un problema desconocido al eliminar.")
                         
-                except Exception as e: # Al poner 'Exception as e', ya no choca con el st.rerun()
+                except Exception as e: 
                     st.error("Error de conexión con el servidor.")
 
     # --- PESTAÑA 3: COMPRAS (Resurtir) ---
@@ -228,7 +226,8 @@ else:
                         st.rerun()
                     else:
                         st.error("Problema al registrar la compra.")
-                except: st.error("Error al conectar con el servidor.")
+                except Exception as e: 
+                    st.error("Error al conectar con el servidor.")
         else:
             st.warning("Primero debes agregar productos en la pestaña de Inventario.")
 
@@ -247,8 +246,10 @@ else:
                     res_m = requests.post(f"{API_URL}/mermas/", json=payload_merma)
                     if res_m.status_code == 200:
                         st.success("¡Merma registrada!")
-                        time.sleep(1); st.rerun()
-                except: st.error("Error de servidor.")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e: 
+                    st.error("Error de servidor.")
 
     # --- PESTAÑA 5: GASTOS ---
     with tab5:
@@ -264,8 +265,10 @@ else:
                     res_g = requests.post(f"{API_URL}/gastos/", json=payload_gasto)
                     if res_g.status_code == 200:
                         st.success("¡Gasto registrado exitosamente!")
-                        time.sleep(1); st.rerun()
-                except: st.error("Error de servidor.")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e: 
+                    st.error("Error de servidor.")
                     
         st.divider()
         st.subheader("📋 Historial de Gastos")
@@ -273,7 +276,8 @@ else:
             gastos_data = requests.get(f"{API_URL}/gastos/").json()
             if gastos_data and isinstance(gastos_data, list):
                 st.dataframe(pd.DataFrame(gastos_data), width="stretch")
-        except: pass
+        except Exception as e: 
+            pass
 
     # --- PESTAÑA 6: REPORTES ---
     with tab6:
@@ -296,4 +300,5 @@ else:
                         st.bar_chart(df_g, x="categoria", y="monto")
                     else: st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
                 else: st.error(f"Error del motor: {res_rep['Error']}")
-            except: st.error("Error al generar el reporte.")
+            except Exception as e: 
+                st.error("Error al generar el reporte.")
