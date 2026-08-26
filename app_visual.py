@@ -70,10 +70,10 @@ else:
     except Exception as e:
         productos = []
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🛒 Venta", "🥩 Inventario", "📦 Compras (Resurtir)", "🗑️ Mermas", "💸 Gastos", "📊 Reportes"])
+    # ¡NUEVO NOMBRE EN LA ÚLTIMA PESTAÑA!
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🛒 Venta", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes"])
 
-    # --- PESTAÑA 1: VENTAS ---
-   # --- PESTAÑA 1: VENTAS (AHORA CON TICKET) ---
+    # --- PESTAÑA 1: VENTAS (CON TICKET CORREGIDO) ---
     with tab1:
         st.header("🛒 Registrar Venta")
         if productos and isinstance(productos, list):
@@ -100,7 +100,6 @@ else:
                             id_venta = res.json().get("id_venta")
                             st.success("¡Venta registrada con éxito!")
                             
-                            # --- GENERACIÓN VISUAL DEL TICKET ---
                             res_ticket = requests.get(f"{API_URL}/tickets/{id_venta}").json()
                             if "Error" not in res_ticket:
                                 st.markdown("---")
@@ -108,7 +107,9 @@ else:
                                 st.write(f"**Folio:** #{res_ticket['id_venta']} | **Fecha:** {res_ticket['fecha'][:16]}")
                                 st.divider()
                                 for d in res_ticket['detalles']:
-                                    st.write(f"🥩 **{d['producto']}**")
+                                    # El .strip() limpia espacios invisibles para que no salgan asteriscos
+                                    nombre_limpio = str(d['producto']).strip() 
+                                    st.write(f"🥩 **{nombre_limpio}**")
                                     st.write(f"{d['cantidad']} KG x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
                                 st.divider()
                                 st.markdown(f"<h3 style='text-align: right;'>TOTAL: ${res_ticket['total']:,.2f} MXN</h3>", unsafe_allow_html=True)
@@ -130,7 +131,6 @@ else:
     with tab2:
         st.header("Catálogo y Existencias")
         
-        # ACORDEÓN 1: NUEVO PRODUCTO
         with st.expander("➕ Agregar Nuevo Producto"):
             with st.form("form_nuevo_producto"):
                 nombre = st.text_input("Nombre del Producto:")
@@ -153,7 +153,6 @@ else:
                     except Exception as e: 
                         st.error("Error de servidor.")
         
-        # ACORDEÓN 2: EDITAR PRECIOS 
         with st.expander("✏️ Editar Precios de un Producto"):
             if productos and isinstance(productos, list):
                 opciones_edit = {f"#{p['id']} - {p['nombre']}": p for p in productos}
@@ -216,7 +215,7 @@ else:
                 except Exception as e: 
                     st.error("Error de conexión con el servidor.")
 
-    # --- PESTAÑA 3: COMPRAS (Resurtir) ---
+    # --- PESTAÑA 3: COMPRAS ---
     with tab3:
         st.header("📦 Ingresar Nueva Mercancía (Resurtir)")
         st.write("¿Llegaste de la Central de Abastos? Registra aquí los kilos que compraste para sumarlos a tu inventario.")
@@ -302,12 +301,47 @@ else:
         except Exception as e: 
             pass
 
-    # --- PESTAÑA 6: REPORTES ---
+    # --- PESTAÑA 6: CAJA Y REPORTES (¡LA NUEVA FASE 2!) ---
     with tab6:
-        st.header("📊 Tablero Financiero")
-        periodo_sel = st.selectbox("📅 Selecciona el periodo del reporte:", ["Hoy", "Semana", "Mes", "General"])
+        st.header("🧮 Control de Caja y Tablero Financiero")
         
-        if st.button("🔄 Generar Corte de Caja", type="primary"):
+        # --- SECCIÓN DE CORTE DE CAJA ---
+        st.subheader("💵 Turno Actual (Corte de Caja)")
+        st.write("Registra con cuánto dinero abriste la caja hoy para saber cuánto efectivo exacto deberías tener.")
+        
+        fondo_inicial = st.number_input("Fondo de caja inicial (Morralla) $:", min_value=0.0, step=50.0, value=500.0)
+        
+        if st.button("⚖️ Hacer Corte de Caja de HOY", type="primary"):
+            try:
+                # Usamos el motor de reportes de 'Hoy' para hacer el cálculo
+                res_rep = requests.get(f"{API_URL}/reportes/?periodo=Hoy").json()
+                if "Error" not in res_rep:
+                    ventas_hoy = res_rep['ventas']
+                    gastos_hoy = res_rep['gastos']
+                    
+                    # Matemática simple de cajero
+                    efectivo_esperado = fondo_inicial + ventas_hoy - gastos_hoy
+                    
+                    st.info("### 💰 Resultado del Corte de Caja")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("1. Fondo Inicial", f"${fondo_inicial:,.2f}")
+                    c2.metric("2. Entradas (Ventas)", f"+ ${ventas_hoy:,.2f}")
+                    c3.metric("3. Salidas (Gastos)", f"- ${gastos_hoy:,.2f}")
+                    c4.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:,.2f}")
+                    
+                    st.warning(f"**Instrucción:** Abre el cajón. Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas (si todo fue en efectivo).")
+                else: 
+                    st.error(f"Error del motor: {res_rep['Error']}")
+            except Exception as e: 
+                st.error("Error al generar el corte de caja.")
+        
+        st.divider()
+        
+        # --- SECCIÓN DEL REPORTE HISTÓRICO ORIGINAL ---
+        st.subheader("📊 Reportes Financieros Generales")
+        periodo_sel = st.selectbox("📅 Selecciona el periodo histórico:", ["Semana", "Mes", "General"])
+        
+        if st.button("🔄 Ver Historial Financiero"):
             try:
                 res_rep = requests.get(f"{API_URL}/reportes/?periodo={periodo_sel}").json()
                 if "Error" not in res_rep:
@@ -316,12 +350,15 @@ else:
                     col2.metric("Salidas (Gastos)", f"${res_rep['gastos']:,.2f}")
                     col3.metric("Pérdida (Mermas)", f"${res_rep['mermas']:,.2f}")
                     col4.metric("GANANCIA NETA", f"${res_rep['ganancia_neta']:,.2f}")
+                    
                     st.divider()
                     st.subheader(f"📈 ¿En qué se va el dinero? (Periodo: {periodo_sel})")
                     if res_rep["detalle_gastos"]:
                         df_g = pd.DataFrame(res_rep["detalle_gastos"]).groupby("categoria").sum().reset_index()
                         st.bar_chart(df_g, x="categoria", y="monto")
-                    else: st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
-                else: st.error(f"Error del motor: {res_rep['Error']}")
+                    else: 
+                        st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
+                else: 
+                    st.error(f"Error del motor: {res_rep['Error']}")
             except Exception as e: 
-                st.error("Error al generar el reporte.")
+                st.error("Error al generar el reporte histórico.")
