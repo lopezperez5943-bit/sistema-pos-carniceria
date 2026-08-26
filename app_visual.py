@@ -73,8 +73,9 @@ else:
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🛒 Venta", "🥩 Inventario", "📦 Compras (Resurtir)", "🗑️ Mermas", "💸 Gastos", "📊 Reportes"])
 
     # --- PESTAÑA 1: VENTAS ---
+   # --- PESTAÑA 1: VENTAS (AHORA CON TICKET) ---
     with tab1:
-        st.header("Registrar Venta")
+        st.header("🛒 Registrar Venta")
         if productos and isinstance(productos, list):
             opciones_prod = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']:.3f} KG)": p for p in productos}
             prod_seleccionado = st.selectbox("Selecciona el corte de carne:", list(opciones_prod.keys()))
@@ -93,15 +94,37 @@ else:
                     st.error("⚠️ No tienes suficiente stock para esta venta.")
                 else:
                     payload = {"detalles": [{"id_producto": id_prod, "cantidad": cantidad, "precio_unitario": precio_venta}]}
-                    res = requests.post(f"{API_URL}/ventas/", json=payload)
-                    if res.status_code == 200:
-                        st.success("¡Venta registrada y descontada del inventario con éxito!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Error al registrar la venta.")
+                    try:
+                        res = requests.post(f"{API_URL}/ventas/", json=payload)
+                        if res.status_code == 200:
+                            id_venta = res.json().get("id_venta")
+                            st.success("¡Venta registrada con éxito!")
+                            
+                            # --- GENERACIÓN VISUAL DEL TICKET ---
+                            res_ticket = requests.get(f"{API_URL}/tickets/{id_venta}").json()
+                            if "Error" not in res_ticket:
+                                st.markdown("---")
+                                st.markdown("<h2 style='text-align: center;'>🧾 TICKET DE VENTA</h2>", unsafe_allow_html=True)
+                                st.write(f"**Folio:** #{res_ticket['id_venta']} | **Fecha:** {res_ticket['fecha'][:16]}")
+                                st.divider()
+                                for d in res_ticket['detalles']:
+                                    st.write(f"🥩 **{d['producto']}**")
+                                    st.write(f"{d['cantidad']} KG x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
+                                st.divider()
+                                st.markdown(f"<h3 style='text-align: right;'>TOTAL: ${res_ticket['total']:,.2f} MXN</h3>", unsafe_allow_html=True)
+                                st.markdown("---")
+                                
+                                if st.button("🔄 Iniciar Nueva Venta"):
+                                    st.rerun()
+                            else:
+                                time.sleep(1.5)
+                                st.rerun()
+                        else:
+                            st.error("Error al registrar la venta.")
+                    except Exception as e:
+                        st.error("Error de conexión con el servidor al cobrar.")
         else:
-            st.warning("No hay productos registrados.")
+            st.warning("No hay productos registrados en el inventario.")
 
     # --- PESTAÑA 2: INVENTARIO ---
     with tab2:
