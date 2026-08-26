@@ -8,11 +8,11 @@ URL_BASE_DATOS = "postgresql://neondb_owner:npg_Ycz1MT9nRBtL@ep-patient-term-axk
 
 engine = create_engine(
     URL_BASE_DATOS, 
-    connect_args={'client_encoding': 'utf8'} # Protegido contra acentos y eñes
+    connect_args={'client_encoding': 'utf8'}
 )
 app = FastAPI(title="API POS - Carnicería")
 
-# --- 2. MODELOS DE DATOS (MOLDES PYDANTIC) ---
+# --- 2. MODELOS DE DATOS ---
 class CategoriaNueva(BaseModel):
     nombre: str
 
@@ -31,6 +31,7 @@ class DetalleVenta(BaseModel):
 
 class VentaNueva(BaseModel):
     detalles: List[DetalleVenta]
+    metodo_pago: str = "Efectivo"  # <--- ¡NUEVO CAMPO!
 
 class MermaNueva(BaseModel):
     id_producto: int
@@ -52,14 +53,12 @@ class PrecioData(BaseModel):
     precio_compra: float
     precio_venta: float
 
-
-# --- 3. RUTAS / ENDPOINTS DEL SISTEMA ---
+# --- 3. RUTAS / ENDPOINTS ---
 
 @app.get("/")
 def probar_conexion():
     return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
-# A) CATEGORÍAS
 @app.get("/categorias/")
 def ver_categorias():
     try:
@@ -69,7 +68,6 @@ def ver_categorias():
     except Exception as e:
         return {"Error": str(e)}
 
-# B) PRODUCTOS Y STOCK DIRECTO
 @app.post("/productos/")
 def agregar_producto(producto: ProductoNuevo):
     try:
@@ -111,7 +109,6 @@ def actualizar_precios(id_producto: int, datos: PrecioData):
                 SET precio_compra = :compra, precio_venta = :venta 
                 WHERE id_producto = :id_p
             """), {"compra": datos.precio_compra, "venta": datos.precio_venta, "id_p": id_producto})
-            
             conn.commit()
             return {"mensaje": "Precios actualizados con éxito."}
     except Exception as e:
@@ -127,19 +124,16 @@ def eliminar_producto(id_producto: int):
     except Exception:
         return {"Error": "No se puede eliminar porque ya tiene ventas o mermas asociadas."}
 
-# C) COMPRAS (RESURTIR MERCANCÍA)
 @app.post("/compras/")
 def registrar_compra(datos: CompraData):
     try:
         with engine.connect() as conn:
-            # Sumar stock 
             conn.execute(text("""
                 UPDATE productos 
                 SET stock_actual = stock_actual + :cant 
                 WHERE id_producto = :id_p
             """), {"cant": datos.cantidad, "id_p": datos.id_producto})
             
-            # Registrar gasto
             conn.execute(text("""
                 INSERT INTO gastos (categoria, monto, descripcion)
                 VALUES ('Flete / Viaje a Central de Abastos', :monto, :desc)
@@ -150,12 +144,15 @@ def registrar_compra(datos: CompraData):
     except Exception as e:
         return {"Error": str(e)}
 
-# D) VENTAS
 @app.post("/ventas/")
 def registrar_venta(datos: VentaNueva):
     try:
         with engine.connect() as conn:
-            res_venta = conn.execute(text("INSERT INTO ventas (total) VALUES (0) RETURNING id_venta;"))
+            # ¡MODIFICADO PARA GUARDAR EL MÉTODO DE PAGO!
+            res_venta = conn.execute(
+                text("INSERT INTO ventas (total, metodo_pago) VALUES (0, :pago) RETURNING id_venta;"),
+                {"pago": datos.metodo_pago}
+            )
             id_venta = res_venta.scalar()
             total_venta = 0
             
@@ -182,92 +179,10 @@ def registrar_venta(datos: VentaNueva):
                          {"tot": total_venta, "id_v": id_venta})
             
             conn.commit()
-            return {"mensaje": "Venta exitosa e inventario actualizado", "id_venta": id_venta}
+            return {"mensaje": "Venta exitosa", "id_venta": id_venta}
     except Exception as e:
         return {"Error": str(e)}
 
-# E) CONTROL ESTRICTO DE MERMAS
-@app.post("/mermas/")
-def registrar_merma(merma: MermaNueva):
-    try:
-        with engine.connect() as conexion:
-            query_merma = text("""
-                INSERT INTO mermas (id_producto, peso_merma, descripcion)
-                VALUES (:prod, :peso, :desc) RETURNING id_merma
-            """)
-            res = conexion.execute(query_merma, {
-                "prod": merma.id_producto, "peso": merma.peso_merma, "desc": merma.descripcion
-            })
-            id_m = res.fetchone()[0]
-            
-            conexion.execute(text("UPDATE productos SET stock_actual = stock_actual - :peso WHERE id_producto = :prod"), 
-                             {"peso": merma.peso_merma, "prod": merma.id_producto})
-            conexion.commit()
-            
-        return {"mensaje": "¡Merma registrada y descontada del inventario!", "id_merma": id_m, "kilos_descontados": merma.peso_merma}
-    except Exception as e:
-        return {"Error": "No se pudo registrar la merma", "Detalle": str(e)}
-    
-# F) CONTROL DE GASTOS
-@app.post("/gastos/")
-def registrar_gasto(gasto: GastoNuevo):
-    try:
-        with engine.connect() as conexion:
-            query = text("""
-                INSERT INTO gastos (categoria, monto, descripcion)
-                VALUES (:cat, :monto, :desc) RETURNING id_gasto
-            """)
-            res = conexion.execute(query, {
-                "cat": gasto.categoria, 
-                "monto": gasto.monto, 
-                "desc": gasto.descripcion
-            })
-            conexion.commit()
-            return {"mensaje": "Gasto guardado con éxito", "id_gasto": res.fetchone()[0]}
-    except Exception as e:
-        return {"Error": "No se pudo guardar el gasto", "Detalle": str(e)}
-
-@app.get("/gastos/")
-def ver_gastos():
-    try:
-        with engine.connect() as conexion:
-            res = conexion.execute(text("SELECT categoria, monto, descripcion FROM gastos ORDER BY fecha DESC"))
-            return [{"categoria": f[0], "monto": float(f[1]), "descripcion": f[2]} for f in res.fetchall()]
-    except Exception:
-        return []
-
-# G) REPORTES Y GRÁFICAS FINANCIERAS
-@app.get("/reportes/")
-def ver_reportes(periodo: str = "General"):
-    try:
-        with engine.connect() as conexion:
-            filtro = ""
-            if periodo == "Hoy":
-                filtro = "WHERE fecha >= CURRENT_DATE"
-            elif periodo == "Semana":
-                filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '7 days'"
-            elif periodo == "Mes":
-                filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '30 days'"
-
-            ventas = conexion.execute(text(f"SELECT total FROM ventas {filtro}")).fetchall()
-            gastos = conexion.execute(text(f"SELECT monto, categoria FROM gastos {filtro}")).fetchall()
-            
-            filtro_mermas = filtro.replace("fecha", "m.fecha")
-            mermas = conexion.execute(text(f"SELECT m.peso_merma, p.precio_compra FROM mermas m JOIN productos p ON m.id_producto = p.id_producto {filtro_mermas}")).fetchall()
-            
-            t_ventas = sum([float(v[0]) for v in ventas]) if ventas else 0.0
-            t_gastos = sum([float(g[0]) for g in gastos]) if gastos else 0.0
-            t_mermas = sum([float(m[0]) * float(m[1]) for m in mermas]) if mermas else 0.0
-            
-            return {
-                "ventas": t_ventas, "gastos": t_gastos, "mermas": t_mermas,
-                "ganancia_neta": t_ventas - t_gastos - t_mermas,
-                "detalle_gastos": [{"categoria": g[1], "monto": float(g[0])} for g in gastos]
-            }
-    except Exception as e:
-        return {"Error": str(e)}
-
-# --- NUEVA FUNCIÓN PARA GENERAR TICKETS ---
 @app.get("/tickets/{id_venta}")
 def generar_ticket(id_venta: int):
     try:
@@ -291,6 +206,92 @@ def generar_ticket(id_venta: int):
                 "fecha": str(res[0][1]),
                 "total": float(res[0][6]),
                 "detalles": detalles
+            }
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.post("/mermas/")
+def registrar_merma(merma: MermaNueva):
+    try:
+        with engine.connect() as conexion:
+            query_merma = text("""
+                INSERT INTO mermas (id_producto, peso_merma, descripcion)
+                VALUES (:prod, :peso, :desc) RETURNING id_merma
+            """)
+            res = conexion.execute(query_merma, {
+                "prod": merma.id_producto, "peso": merma.peso_merma, "desc": merma.descripcion
+            })
+            id_m = res.fetchone()[0]
+            
+            conexion.execute(text("UPDATE productos SET stock_actual = stock_actual - :peso WHERE id_producto = :prod"), 
+                             {"peso": merma.peso_merma, "prod": merma.id_producto})
+            conexion.commit()
+            
+        return {"mensaje": "¡Merma registrada!", "id_merma": id_m, "kilos_descontados": merma.peso_merma}
+    except Exception as e:
+        return {"Error": str(e)}
+    
+@app.post("/gastos/")
+def registrar_gasto(gasto: GastoNuevo):
+    try:
+        with engine.connect() as conexion:
+            query = text("""
+                INSERT INTO gastos (categoria, monto, descripcion)
+                VALUES (:cat, :monto, :desc) RETURNING id_gasto
+            """)
+            res = conexion.execute(query, {
+                "cat": gasto.categoria, 
+                "monto": gasto.monto, 
+                "desc": gasto.descripcion
+            })
+            conexion.commit()
+            return {"mensaje": "Gasto guardado con éxito", "id_gasto": res.fetchone()[0]}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.get("/gastos/")
+def ver_gastos():
+    try:
+        with engine.connect() as conexion:
+            res = conexion.execute(text("SELECT categoria, monto, descripcion FROM gastos ORDER BY fecha DESC"))
+            return [{"categoria": f[0], "monto": float(f[1]), "descripcion": f[2]} for f in res.fetchall()]
+    except Exception:
+        return []
+
+@app.get("/reportes/")
+def ver_reportes(periodo: str = "General"):
+    try:
+        with engine.connect() as conexion:
+            filtro = ""
+            if periodo == "Hoy":
+                filtro = "WHERE fecha >= CURRENT_DATE"
+            elif periodo == "Semana":
+                filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '7 days'"
+            elif periodo == "Mes":
+                filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '30 days'"
+
+            # ¡MODIFICADO PARA SEPARAR EFECTIVO DE BANCOS!
+            ventas = conexion.execute(text(f"SELECT total, metodo_pago FROM ventas {filtro}")).fetchall()
+            gastos = conexion.execute(text(f"SELECT monto, categoria FROM gastos {filtro}")).fetchall()
+            
+            filtro_mermas = filtro.replace("fecha", "m.fecha")
+            mermas = conexion.execute(text(f"SELECT m.peso_merma, p.precio_compra FROM mermas m JOIN productos p ON m.id_producto = p.id_producto {filtro_mermas}")).fetchall()
+            
+            t_ventas_efectivo = sum([float(v[0]) for v in ventas if v[1] == 'Efectivo' or v[1] is None])
+            t_ventas_banco = sum([float(v[0]) for v in ventas if v[1] in ['Tarjeta', 'Transferencia']])
+            t_ventas_total = t_ventas_efectivo + t_ventas_banco
+            
+            t_gastos = sum([float(g[0]) for g in gastos]) if gastos else 0.0
+            t_mermas = sum([float(m[0]) * float(m[1]) for m in mermas]) if mermas else 0.0
+            
+            return {
+                "ventas_totales": t_ventas_total,
+                "ventas_efectivo": t_ventas_efectivo,
+                "ventas_banco": t_ventas_banco,
+                "gastos": t_gastos,
+                "mermas": t_mermas,
+                "ganancia_neta": t_ventas_total - t_gastos - t_mermas,
+                "detalle_gastos": [{"categoria": g[1], "monto": float(g[0])} for g in gastos]
             }
     except Exception as e:
         return {"Error": str(e)}

@@ -9,6 +9,9 @@ st.set_page_config(page_title="Punto de Venta - Carnicería", page_icon="🥩", 
 # CONEXIÓN AL MOTOR EN LA NUBE (Render)
 API_URL = "https://api-carniceria-bdoz.onrender.com"
 
+# --- DATOS PARA EL QR DE TRANSFERENCIAS (Cámbialos por los tuyos) ---
+DATOS_TRANSFERENCIA = "CLABE: 012345678901234567 | Banco: BBVA | Beneficiario: Carniceria"
+
 # --- MEMORIA DE SESIÓN (LOGIN) ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -70,10 +73,9 @@ else:
     except Exception as e:
         productos = []
 
-    # ¡NUEVO NOMBRE EN LA ÚLTIMA PESTAÑA!
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🛒 Venta", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes"])
 
-    # --- PESTAÑA 1: VENTAS (CON TICKET CORREGIDO) ---
+    # --- PESTAÑA 1: VENTAS (MÉTODOS DE PAGO Y QR) ---
     with tab1:
         st.header("🛒 Registrar Venta")
         if productos and isinstance(productos, list):
@@ -87,27 +89,40 @@ else:
             precio_venta = opciones_prod[prod_seleccionado]["precio_venta"]
             id_prod = opciones_prod[prod_seleccionado]["id"]
             
+            # NUEVO: Selector de método de pago
+            st.divider()
+            metodo_pago = st.radio("💳 Selecciona el método de pago:", ["Efectivo", "Tarjeta", "Transferencia"], horizontal=True)
+            
+            # Mostrar QR si elige Transferencia
+            if metodo_pago == "Transferencia":
+                with st.expander("📲 MOSTRAR CÓDIGO QR AL CLIENTE"):
+                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={DATOS_TRANSFERENCIA}"
+                    st.image(qr_url, caption="Pide al cliente que escanee este código desde la app de su banco.")
+            
             st.info(f"**Total a cobrar:** ${(cantidad * precio_venta):,.2f} MXN")
             
             if st.button("💰 Cobrar Venta", type="primary"):
                 if cantidad > opciones_prod[prod_seleccionado]["stock_actual"]:
                     st.error("⚠️ No tienes suficiente stock para esta venta.")
                 else:
-                    payload = {"detalles": [{"id_producto": id_prod, "cantidad": cantidad, "precio_unitario": precio_venta}]}
+                    payload = {
+                        "detalles": [{"id_producto": id_prod, "cantidad": cantidad, "precio_unitario": precio_venta}],
+                        "metodo_pago": metodo_pago
+                    }
                     try:
                         res = requests.post(f"{API_URL}/ventas/", json=payload)
                         if res.status_code == 200:
                             id_venta = res.json().get("id_venta")
-                            st.success("¡Venta registrada con éxito!")
+                            st.success(f"¡Venta registrada con éxito ({metodo_pago})!")
                             
                             res_ticket = requests.get(f"{API_URL}/tickets/{id_venta}").json()
                             if "Error" not in res_ticket:
                                 st.markdown("---")
                                 st.markdown("<h2 style='text-align: center;'>🧾 TICKET DE VENTA</h2>", unsafe_allow_html=True)
                                 st.write(f"**Folio:** #{res_ticket['id_venta']} | **Fecha:** {res_ticket['fecha'][:16]}")
+                                st.write(f"**Pagado mediante:** {metodo_pago}")
                                 st.divider()
                                 for d in res_ticket['detalles']:
-                                    # El .strip() limpia espacios invisibles para que no salgan asteriscos
                                     nombre_limpio = str(d['producto']).strip() 
                                     st.write(f"🥩 **{nombre_limpio}**")
                                     st.write(f"{d['cantidad']} KG x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
@@ -211,7 +226,6 @@ else:
                         st.rerun()
                     else:
                         st.error("Ocurrió un problema desconocido al eliminar.")
-                        
                 except Exception as e: 
                     st.error("Error de conexión con el servidor.")
 
@@ -301,11 +315,10 @@ else:
         except Exception as e: 
             pass
 
-    # --- PESTAÑA 6: CAJA Y REPORTES (¡LA NUEVA FASE 2!) ---
+    # --- PESTAÑA 6: CAJA Y REPORTES (SEPARANDO BANCO DE EFECTIVO) ---
     with tab6:
         st.header("🧮 Control de Caja y Tablero Financiero")
         
-        # --- SECCIÓN DE CORTE DE CAJA ---
         st.subheader("💵 Turno Actual (Corte de Caja)")
         st.write("Registra con cuánto dinero abriste la caja hoy para saber cuánto efectivo exacto deberías tener.")
         
@@ -313,31 +326,30 @@ else:
         
         if st.button("⚖️ Hacer Corte de Caja de HOY", type="primary"):
             try:
-                # Usamos el motor de reportes de 'Hoy' para hacer el cálculo
                 res_rep = requests.get(f"{API_URL}/reportes/?periodo=Hoy").json()
                 if "Error" not in res_rep:
-                    ventas_hoy = res_rep['ventas']
-                    gastos_hoy = res_rep['gastos']
+                    # AHORA SOLO SUMAMOS EL EFECTIVO PARA EL CAJÓN FÍSICO
+                    ventas_efectivo = res_rep.get('ventas_efectivo', 0.0)
+                    ventas_banco = res_rep.get('ventas_banco', 0.0)
+                    gastos_hoy = res_rep.get('gastos', 0.0)
                     
-                    # Matemática simple de cajero
-                    efectivo_esperado = fondo_inicial + ventas_hoy - gastos_hoy
+                    efectivo_esperado = fondo_inicial + ventas_efectivo - gastos_hoy
                     
-                    st.info("### 💰 Resultado del Corte de Caja")
+                    st.info("### 💰 Resultado del Corte de Caja (Físico)")
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("1. Fondo Inicial", f"${fondo_inicial:,.2f}")
-                    c2.metric("2. Entradas (Ventas)", f"+ ${ventas_hoy:,.2f}")
+                    c2.metric("2. Entradas (EFECTIVO)", f"+ ${ventas_efectivo:,.2f}")
                     c3.metric("3. Salidas (Gastos)", f"- ${gastos_hoy:,.2f}")
-                    c4.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:,.2f}")
+                    c4.metric("EFECTIVO EN CAJÓN", f"${efectivo_esperado:,.2f}")
                     
-                    st.warning(f"**Instrucción:** Abre el cajón. Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas (si todo fue en efectivo).")
+                    st.warning(f"**Instrucción:** Abre el cajón. Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas.")
+                    st.success(f"💳 **Dinero extra seguro en Banco (Tarjetas/Transferencias):** ${ventas_banco:,.2f} MXN")
                 else: 
                     st.error(f"Error del motor: {res_rep['Error']}")
             except Exception as e: 
                 st.error("Error al generar el corte de caja.")
         
         st.divider()
-        
-        # --- SECCIÓN DEL REPORTE HISTÓRICO ORIGINAL ---
         st.subheader("📊 Reportes Financieros Generales")
         periodo_sel = st.selectbox("📅 Selecciona el periodo histórico:", ["Semana", "Mes", "General"])
         
@@ -346,10 +358,10 @@ else:
                 res_rep = requests.get(f"{API_URL}/reportes/?periodo={periodo_sel}").json()
                 if "Error" not in res_rep:
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Ingresos (Ventas)", f"${res_rep['ventas']:,.2f}")
-                    col2.metric("Salidas (Gastos)", f"${res_rep['gastos']:,.2f}")
-                    col3.metric("Pérdida (Mermas)", f"${res_rep['mermas']:,.2f}")
-                    col4.metric("GANANCIA NETA", f"${res_rep['ganancia_neta']:,.2f}")
+                    col1.metric("Ingresos Totales", f"${res_rep.get('ventas_totales', 0):,.2f}")
+                    col2.metric("Salidas (Gastos)", f"${res_rep.get('gastos', 0):,.2f}")
+                    col3.metric("Pérdida (Mermas)", f"${res_rep.get('mermas', 0):,.2f}")
+                    col4.metric("GANANCIA NETA", f"${res_rep.get('ganancia_neta', 0):,.2f}")
                     
                     st.divider()
                     st.subheader(f"📈 ¿En qué se va el dinero? (Periodo: {periodo_sel})")
