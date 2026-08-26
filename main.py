@@ -266,3 +266,31 @@ def ver_reportes(periodo: str = "General"):
             }
     except Exception as e:
         return {"Error": str(e)}
+
+# --- NUEVA FUNCIÓN PARA GENERAR TICKETS ---
+@app.get("/tickets/{id_venta}")
+def generar_ticket(id_venta: int):
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                SELECT v.id_venta, v.fecha, p.nombre, dv.cantidad, dv.precio_unitario, (dv.cantidad * dv.precio_unitario) as subtotal, v.total
+                FROM ventas v
+                JOIN detalle_ventas dv ON v.id_venta = dv.id_venta
+                JOIN productos p ON dv.id_producto = p.id_producto
+                WHERE v.id_venta = :id_v
+            """)
+            res = conn.execute(query, {"id_v": id_venta}).fetchall()
+
+            if not res:
+                return {"Error": "Ticket no encontrado"}
+
+            detalles = [{"producto": f[2], "cantidad": float(f[3]), "precio_unitario": float(f[4]), "subtotal": float(f[5])} for f in res]
+
+            return {
+                "id_venta": res[0][0],
+                "fecha": str(res[0][1]),
+                "total": float(res[0][6]),
+                "detalles": detalles
+            }
+    except Exception as e:
+        return {"Error": str(e)}
