@@ -93,11 +93,16 @@ else:
             st.divider()
             metodo_pago = st.radio("💳 Selecciona el método de pago:", ["Efectivo", "Tarjeta", "Transferencia"], horizontal=True)
             
-            # Mostrar QR si elige Transferencia
+          # Mostrar QR si elige Transferencia
             if metodo_pago == "Transferencia":
                 with st.expander("📲 MOSTRAR CÓDIGO QR AL CLIENTE"):
-                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={DATOS_TRANSFERENCIA}"
-                    st.image(qr_url, caption="Pide al cliente que escanee este código desde la app de su banco.")
+                    try:
+                        # Muestra la imagen oficial que tú subiste
+                        st.image("mi_qr.png", width=300)
+                        st.info("Escanea el QR con la app de tu banco o Mercado Pago para transferir.")
+                    except:
+                        # Por si se te olvida subir la imagen
+                        st.warning("⚠️ Falta subir la imagen 'mi_qr.png' a GitHub.")
             
             st.info(f"**Total a cobrar:** ${(cantidad * precio_venta):,.2f} MXN")
             
