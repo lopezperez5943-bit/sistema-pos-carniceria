@@ -52,14 +52,14 @@ class GastoNuevo(BaseModel):
     categoria: str
     monto: float
     descripcion: str = ""
-    id_proveedor: Optional[int] = None # <--- NUEVO
+    id_proveedor: Optional[int] = None
 
 class CompraData(BaseModel):
     id_producto: int
     cantidad: float
     costo_total: float
     descripcion: str
-    id_proveedor: Optional[int] = None # <--- NUEVO
+    id_proveedor: Optional[int] = None
 
 class PrecioData(BaseModel):
     precio_compra: float
@@ -74,10 +74,17 @@ class UsuarioNuevo(BaseModel):
     password: str
     rol: str
 
-class ProveedorNuevo(BaseModel): # <--- NUEVO MODELO
+class ProveedorNuevo(BaseModel):
     nombre_empresa: str
     contacto: str = ""
     telefono: str = ""
+
+class AperturaCajaData(BaseModel):
+    usuario: str
+    fondo_inicial: float
+
+class CierreCajaData(BaseModel):
+    efectivo_real: float
 
 
 # --- 3. RUTAS / ENDPOINTS ---
@@ -139,7 +146,6 @@ def eliminar_usuario(id_usuario: int):
     except Exception as e:
         return {"Error": str(e)}
 
-# --- NUEVO: RUTAS DE PROVEEDORES ---
 @app.get("/proveedores/")
 def ver_proveedores():
     try:
@@ -169,7 +175,6 @@ def eliminar_proveedor(id_proveedor: int):
             return {"mensaje": "Proveedor eliminado."}
     except Exception as e:
         return {"Error": str(e)}
-
 
 @app.get("/clientes/")
 def ver_clientes():
@@ -445,5 +450,67 @@ def top_productos(limite: int = 10):
             """)
             res = conn.execute(query, {"lim": limite}).fetchall()
             return [{"producto": f[0], "total_vendido": float(f[1])} for f in res]
+    except Exception as e:
+        return {"Error": str(e)}
+
+# --- NUEVAS RUTAS PARA APERTURA Y CIERRE DE CAJA ---
+@app.get("/caja/turno-activo")
+def verificar_turno(usuario: str):
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT id_turno, fondo_inicial, fecha_apertura FROM turnos_caja WHERE usuario = :u AND estado = 'Abierto'"),
+                               {"u": usuario}).fetchone()
+            if res:
+                return {"id_turno": res[0], "fondo_inicial": float(res[1]), "fecha_apertura": str(res[2])}
+            return {"id_turno": None}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.post("/caja/abrir")
+def abrir_turno(datos: AperturaCajaData):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO turnos_caja (usuario, fondo_inicial, estado) VALUES (:u, :f, 'Abierto')"),
+                         {"u": datos.usuario, "f": datos.fondo_inicial})
+            conn.commit()
+            return {"mensaje": "Turno abierto con éxito"}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.post("/caja/cerrar/{id_turno}")
+def cerrar_turno(id_turno: int, datos: CierreCajaData):
+    try:
+        with engine.connect() as conn:
+            turno = conn.execute(text("SELECT fondo_inicial, fecha_apertura FROM turnos_caja WHERE id_turno = :id"), {"id": id_turno}).fetchone()
+            if not turno:
+                return {"Error": "Turno no encontrado"}
+            
+            fondo = float(turno[0])
+            f_apertura = turno[1]
+            
+            # Sumar ventas en efectivo y gastos desde la apertura de este turno
+            v_efectivo = conn.execute(text("SELECT COALESCE(SUM(total), 0) FROM ventas WHERE fecha >= :fa AND (metodo_pago = 'Efectivo' OR metodo_pago LIKE 'Abono Efectivo')"), {"fa": f_apertura}).scalar()
+            g_total = conn.execute(text("SELECT COALESCE(SUM(monto), 0) FROM gastos WHERE fecha >= :fa"), {"fa": f_apertura}).scalar()
+            
+            esperado = fondo + float(v_efectivo) - float(g_total)
+            real = datos.efectivo_real
+            diferencia = real - esperado
+            
+            conn.execute(text("""
+                UPDATE turnos_caja 
+                SET total_ventas_efectivo = :ve, total_gastos = :ge, efectivo_esperado = :esp, 
+                    efectivo_real_contado = :real, diferencia = :dif, estado = 'Cerrado', fecha_cierre = CURRENT_TIMESTAMP
+                WHERE id_turno = :id
+            """), {"ve": float(v_efectivo), "ge": float(g_total), "esp": esperado, "real": real, "dif": diferencia, "id": id_turno})
+            conn.commit()
+            
+            return {
+                "fondo": fondo,
+                "ventas_efectivo": float(v_efectivo),
+                "gastos": float(g_total),
+                "esperado": esperado,
+                "real": real,
+                "diferencia": diferencia
+            }
     except Exception as e:
         return {"Error": str(e)}

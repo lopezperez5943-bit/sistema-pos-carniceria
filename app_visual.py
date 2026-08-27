@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+import urllib.parse
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Punto de Venta - Carnicería", page_icon="🥩", layout="wide")
@@ -69,7 +70,7 @@ else:
     if st.session_state.rol == "Administrador / Dueño":
         nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🚚 Proveedores", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes", "⚙️ Personal"]
     else:
-        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario"]
+        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "🧮 Caja y Reportes"]
 
     tabs = st.tabs(nombres_pestanas)
 
@@ -335,8 +336,15 @@ else:
         if productos and isinstance(productos, list):
             productos_bajos = [p for p in productos if p['stock_actual'] <= 3.0]
             if productos_bajos:
+                texto_whatsapp = "Hola! Urge resurtir los siguientes productos bajos en stock en la carnicería:\n"
                 for pb in productos_bajos:
                     st.error(f"⚠️ **STOCK BAJO:** Te quedan solo {pb['stock_actual']} KG/PZ de **{pb['nombre']}**.")
+                    texto_whatsapp += f"- {pb['nombre']}: {pb['stock_actual']} restantes\n"
+                
+                # Enlace dinámico para enviar alerta por WhatsApp
+                encoded_msg = urllib.parse.quote(texto_whatsapp)
+                whatsapp_url = f"https://wa.me/?text={encoded_msg}"
+                st.markdown(f'<a href="{whatsapp_url}" target="_blank"><button style="background-color:#25D366; color:white; padding:10px 20px; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">💬 Enviar Alerta de Stock por WhatsApp</button></a>', unsafe_allow_html=True)
             else:
                 st.success("✅ Todo el inventario tiene buen nivel de stock (Más de 3 KG/PZ).")
 
@@ -375,7 +383,121 @@ else:
 
 
     # =========================================================================
-    # SECCIÓN EXCLUSIVA DE ADMINISTRADOR
+    # PESTAÑA DE CAJA Y REPORTES (DISPONIBLE PARA CAJERO Y ADMIN CON APERTURA/CIERRE)
+    # =========================================================================
+    if st.session_state.rol == "Administrador / Dueño":
+        tab_caja_idx = 7
+    else:
+        tab_caja_idx = 3
+
+    with tabs[tab_caja_idx]:
+        st.header("🧮 Control de Caja y Tablero Financiero")
+        
+        # Verificamos si el usuario tiene un turno abierto
+        try:
+            res_turno = requests.get(f"{API_URL}/caja/turno-activo", params={"usuario": st.session_state.usuario}).json()
+        except:
+            res_turno = {"id_turno": None}
+            
+        id_turno_activo = res_turno.get("id_turno")
+        
+        if not id_turno_activo:
+            st.subheader("🔓 Apertura de Turno (Caja)")
+            st.info("No tienes un turno abierto en este momento. Ingresa el fondo inicial (morralla) para comenzar a operar.")
+            with st.form("form_apertura_turno"):
+                fondo_ini = st.number_input("Fondo inicial en caja ($):", min_value=0.0, step=50.0, value=500.0)
+                if st.form_submit_button("🚀 Abrir Turno de Caja", type="primary"):
+                    try:
+                        res_ab = requests.post(f"{API_URL}/caja/abrir", json={"usuario": st.session_state.usuario, "fondo_inicial": fondo_ini}).json()
+                        if "Error" in res_ab:
+                            st.error(res_ab["Error"])
+                        else:
+                            st.success("¡Turno abierto con éxito!")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error("Error al abrir el turno.")
+        else:
+            st.success(f"🟢 Turno Activo (Abierto por **{st.session_state.usuario}** desde {res_turno.get('fecha_apertura', '')[:16]})")
+            st.metric("Fondo Inicial Registrado", f"${res_turno.get('fondo_inicial', 0):,.2f}")
+            
+            st.divider()
+            st.subheader("🔒 Cierre de Turno y Arqueo de Caja")
+            st.write("Cuenta todo el dinero físico en billetes y monedas que tienes en el cajón e ingrésalo abajo:")
+            
+            with st.form("form_cierre_turno"):
+                efectivo_real = st.number_input("Efectivo físico real contado en cajón ($):", min_value=0.0, step=50.0)
+                if st.form_submit_button("⚖️ Cerrar Turno Oficialmente", type="primary"):
+                    try:
+                        res_cierre = requests.post(f"{API_URL}/caja/cerrar/{id_turno_activo}", json={"efectivo_real": efectivo_real}).json()
+                        if "Error" in res_cierre:
+                            st.error(res_cierre["Error"])
+                        else:
+                            st.success("¡Turno cerrado correctamente!")
+                            st.markdown("### 📊 Reporte del Arqueo de Caja:")
+                            col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+                            col_c1.metric("Fondo", f"${res_cierre['fondo']:,.2f}")
+                            col_c2.metric("Ventas Efectivo", f"+ ${res_cierre['ventas_efectivo']:,.2f}")
+                            col_c3.metric("Efectivo Esperado", f"${res_cierre['esperado']:,.2f}")
+                            col_c4.metric("Efectivo Real", f"${res_cierre['real']:,.2f}")
+                            
+                            dif = res_cierre['diferencia']
+                            if dif == 0:
+                                st.balloons()
+                                st.success("🎯 **¡Caja Exacta! No hay faltantes ni sobrantes.**")
+                            elif dif > 0:
+                                st.warning(f"📈 **¡Sobran ${dif:,.2f} MXN en caja!**")
+                            else:
+                                st.error(f"📉 **¡Faltan ${abs(dif):,.2f} MXN en caja!**")
+                            
+                            time.sleep(3)
+                            st.rerun()
+                    except Exception as e:
+                        st.error("Error al cerrar el turno.")
+
+        # REPORTES FINANCIEROS (SOLO ADMIN)
+        if st.session_state.rol == "Administrador / Dueño":
+            st.divider()
+            st.subheader("📊 Reportes Financieros Generales")
+            periodo_sel = st.selectbox("📅 Selecciona el periodo histórico:", ["Semana", "Mes", "General"])
+            
+            if st.button("🔄 Ver Historial Financiero"):
+                try:
+                    res_rep = requests.get(f"{API_URL}/reportes/?periodo={periodo_sel}").json()
+                    if "Error" not in res_rep:
+                        col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+                        col_h1.metric("Ingresos Totales", f"${res_rep.get('ventas_totales', 0):,.2f}")
+                        col_h2.metric("Salidas (Gastos)", f"${res_rep.get('gastos', 0):,.2f}")
+                        col_h3.metric("Pérdida (Mermas)", f"${res_rep.get('mermas', 0):,.2f}")
+                        col_h4.metric("GANANCIA NETA", f"${res_rep.get('ganancia_neta', 0):,.2f}")
+                        
+                        st.divider()
+                        st.subheader(f"📈 ¿En qué se va el dinero? (Periodo: {periodo_sel})")
+                        if res_rep.get("detalle_gastos"):
+                            df_g = pd.DataFrame(res_rep["detalle_gastos"]).groupby("categoria").sum().reset_index()
+                            st.bar_chart(df_g, x="categoria", y="monto")
+                        else: 
+                            st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
+                    else: 
+                        st.error(f"Error del motor: {res_rep['Error']}")
+                except Exception as e: 
+                    st.error("Error al generar el reporte histórico.")
+                    
+            st.divider()
+            st.subheader("🏆 Ranking de Productos Más Vendidos")
+            try:
+                res_top = requests.get(f"{API_URL}/reportes/top-productos").json()
+                if res_top and isinstance(res_top, list) and len(res_top) > 0 and "Error" not in res_top[0]:
+                    df_top = pd.DataFrame(res_top)
+                    st.bar_chart(df_top, x="producto", y="total_vendido", color="#FF4B4B")
+                else:
+                    st.info("Aún no hay suficientes ventas registradas para generar el ranking.")
+            except Exception as e:
+                pass
+
+
+    # =========================================================================
+    # SECCIÓN EXCLUSIVA DE ADMINISTRADOR (COMPRAS, PROVEEDORES, MERMAS, GASTOS, PERSONAL)
     # =========================================================================
     if st.session_state.rol == "Administrador / Dueño":
         
@@ -386,14 +508,13 @@ else:
                 opciones_compra = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']} KG/PZ)": p["id"] for p in productos}
                 prod_compra = st.selectbox("¿Qué producto estás resurtiendo?", list(opciones_compra.keys()), key="compra_box")
                 
-                # Cargamos proveedores para asignarlos a la compra
                 try:
                     res_provs = requests.get(f"{API_URL}/proveedores/").json()
                 except:
                     res_provs = []
                 
                 id_prov_sel = None
-                if res_provs and isinstance(res_provs, list):
+                if res_provs and isinstance(res_provs, list) and len(res_provs) > 0:
                     opc_provs = {f"#{pr['id_proveedor']} - {pr['nombre_empresa']}": pr['id_proveedor'] for pr in res_provs}
                     prov_escogido = st.selectbox("🚚 Selecciona al Proveedor:", list(opc_provs.keys()))
                     id_prov_sel = opc_provs[prov_escogido]
@@ -424,7 +545,7 @@ else:
             else:
                 st.warning("Primero debes agregar productos en la pestaña de Inventario.")
 
-        # --- 5. PROVEEDORES (NUEVA PESTAÑA) ---
+        # --- 5. PROVEEDORES ---
         with tabs[4]:
             st.header("🚚 Directorio de Proveedores")
             
@@ -519,75 +640,6 @@ else:
                 if gastos_data and isinstance(gastos_data, list):
                     st.dataframe(pd.DataFrame(gastos_data), width="stretch")
             except Exception as e: 
-                pass
-
-        # --- 8. CAJA Y REPORTES ---
-        with tabs[7]:
-            st.header("🧮 Control de Caja y Tablero Financiero")
-            
-            st.subheader("💵 Turno Actual (Corte de Caja)")
-            fondo_inicial = st.number_input("Fondo de caja inicial (Morralla) $:", min_value=0.0, step=50.0, value=500.0)
-            
-            if st.button("⚖️ Hacer Corte de Caja de HOY", type="primary"):
-                try:
-                    res_rep = requests.get(f"{API_URL}/reportes/?periodo=Hoy").json()
-                    if "Error" not in res_rep:
-                        ventas_efectivo = res_rep.get('ventas_efectivo', 0.0)
-                        ventas_banco = res_rep.get('ventas_banco', 0.0)
-                        gastos_hoy = res_rep.get('gastos', 0.0)
-                        
-                        efectivo_esperado = fondo_inicial + ventas_efectivo - gastos_hoy
-                        
-                        st.info("### 💰 Resultado del Corte de Caja (Físico)")
-                        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-                        col_r1.metric("1. Fondo Inicial", f"${fondo_inicial:,.2f}")
-                        col_r2.metric("2. Entradas (EFECTIVO)", f"+ ${ventas_efectivo:,.2f}")
-                        col_r3.metric("3. Salidas (Gastos)", f"- ${gastos_hoy:,.2f}")
-                        col_r4.metric("EFECTIVO EN CAJÓN", f"${efectivo_esperado:,.2f}")
-                        
-                        st.warning(f"**Instrucción:** Abre el cajón. Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas.")
-                        st.success(f"💳 **Dinero extra seguro en Banco (Tarjetas/Transferencias):** ${ventas_banco:,.2f} MXN")
-                    else: 
-                        st.error(f"Error del motor: {res_rep['Error']}")
-                except Exception as e: 
-                    st.error("Error al generar el corte de caja.")
-            
-            st.divider()
-            st.subheader("📊 Reportes Financieros Generales")
-            periodo_sel = st.selectbox("📅 Selecciona el periodo histórico:", ["Semana", "Mes", "General"])
-            
-            if st.button("🔄 Ver Historial Financiero"):
-                try:
-                    res_rep = requests.get(f"{API_URL}/reportes/?periodo={periodo_sel}").json()
-                    if "Error" not in res_rep:
-                        col_h1, col_h2, col_h3, col_h4 = st.columns(4)
-                        col_h1.metric("Ingresos Totales", f"${res_rep.get('ventas_totales', 0):,.2f}")
-                        col_h2.metric("Salidas (Gastos)", f"${res_rep.get('gastos', 0):,.2f}")
-                        col_h3.metric("Pérdida (Mermas)", f"${res_rep.get('mermas', 0):,.2f}")
-                        col_h4.metric("GANANCIA NETA", f"${res_rep.get('ganancia_neta', 0):,.2f}")
-                        
-                        st.divider()
-                        st.subheader(f"📈 ¿En qué se va el dinero? (Periodo: {periodo_sel})")
-                        if res_rep.get("detalle_gastos"):
-                            df_g = pd.DataFrame(res_rep["detalle_gastos"]).groupby("categoria").sum().reset_index()
-                            st.bar_chart(df_g, x="categoria", y="monto")
-                        else: 
-                            st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
-                    else: 
-                        st.error(f"Error del motor: {res_rep['Error']}")
-                except Exception as e: 
-                    st.error("Error al generar el reporte histórico.")
-                    
-            st.divider()
-            st.subheader("🏆 Ranking de Productos Más Vendidos")
-            try:
-                res_top = requests.get(f"{API_URL}/reportes/top-productos").json()
-                if res_top and isinstance(res_top, list) and len(res_top) > 0 and "Error" not in res_top[0]:
-                    df_top = pd.DataFrame(res_top)
-                    st.bar_chart(df_top, x="producto", y="total_vendido", color="#FF4B4B")
-                else:
-                    st.info("Aún no hay suficientes ventas registradas para generar el ranking.")
-            except Exception as e:
                 pass
 
         # --- 9. PERSONAL ---
