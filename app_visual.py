@@ -560,7 +560,7 @@ else:
                     opciones_del_u = {f"#{u['id_usuario']} - {u['username']} ({u['rol']})": u['id_usuario'] for u in usuarios_data}
                     usuario_elim = st.selectbox("Selecciona el usuario a borrar:", list(opciones_del_u.keys()))
                     
-                    if st.button("Eliminar permanentemente"):
+                    if st.button("Eliminar permanentemente", key="btn_borrar_usuario"):
                         try:
                             res_del_u = requests.delete(f"{API_URL}/usuarios/{opciones_del_u[usuario_elim]}").json()
                             if "Error" in res_del_u:
