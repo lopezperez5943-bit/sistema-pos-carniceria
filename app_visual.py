@@ -254,7 +254,15 @@ else:
     # --- 3. INVENTARIO (CON CÓDIGO DE BARRAS) ---
     with tab3:
         st.header("Catálogo y Existencias")
-        
+
+        with st.expander("🖨️ Generador de Etiquetas (Códigos de Barras)"):
+                st.write("Crea códigos para imprimir y pegar en productos sin etiqueta (ej. bolsas de carbón o manteca).")
+                codigo_a_generar = st.text_input("Escribe un código inventado (Ej. 101 o 800123):")
+                if codigo_a_generar:
+                    url_barcode = f"https://barcode.tec-it.com/barcode.ashx?data={codigo_a_generar}&code=Code128&translate-esc=true"
+                    st.image(url_barcode, width=250)
+                    st.info("Haz clic derecho en la imagen, selecciona 'Guardar imagen como...', imprímela y pégala en tu bolsa.")  
+
         with st.expander("➕ Agregar Nuevo Producto (Con Lector)"):
             with st.form("form_nuevo_producto"):
                 nombre = st.text_input("Nombre del Producto:")
