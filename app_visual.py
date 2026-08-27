@@ -67,13 +67,13 @@ else:
 
     # --- CONTROL DE SEGURIDAD: PESTAÑAS SEGÚN EL ROL ---
     if st.session_state.rol == "Administrador / Dueño":
-        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes", "⚙️ Personal"]
+        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🚚 Proveedores", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes", "⚙️ Personal"]
     else:
         nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario"]
 
     tabs = st.tabs(nombres_pestanas)
 
-    # --- 1. VENTAS (ACCESO PARA TODOS) ---
+    # --- 1. VENTAS ---
     with tabs[0]:
         st.header("🛒 Registrar Venta")
         
@@ -242,7 +242,7 @@ else:
                     st.subheader("🗑️ Eliminar Cliente")
                     opciones_del_cli = {f"#{c['id']} - {c['nombre']}": c['id'] for c in clientes_data}
                     cliente_elim = st.selectbox("Cliente a borrar:", list(opciones_del_cli.keys()))
-                    if st.button("Eliminar permanentemente"):
+                    if st.button("Eliminar permanentemente", key="btn_borrar_cliente"):
                         try:
                             res_del = requests.delete(f"{API_URL}/clientes/{opciones_del_cli[cliente_elim]}")
                             if "Error" in res_del.json():
@@ -375,7 +375,7 @@ else:
 
 
     # =========================================================================
-    # A PARTIR DE AQUÍ, TODO EL CÓDIGO SOLO SE EJECUTA SI ERES ADMINISTRADOR
+    # SECCIÓN EXCLUSIVA DE ADMINISTRADOR
     # =========================================================================
     if st.session_state.rol == "Administrador / Dueño":
         
@@ -386,22 +386,37 @@ else:
                 opciones_compra = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']} KG/PZ)": p["id"] for p in productos}
                 prod_compra = st.selectbox("¿Qué producto estás resurtiendo?", list(opciones_compra.keys()), key="compra_box")
                 
+                # Cargamos proveedores para asignarlos a la compra
+                try:
+                    res_provs = requests.get(f"{API_URL}/proveedores/").json()
+                except:
+                    res_provs = []
+                
+                id_prov_sel = None
+                if res_provs and isinstance(res_provs, list):
+                    opc_provs = {f"#{pr['id_proveedor']} - {pr['nombre_empresa']}": pr['id_proveedor'] for pr in res_provs}
+                    prov_escogido = st.selectbox("🚚 Selecciona al Proveedor:", list(opc_provs.keys()))
+                    id_prov_sel = opc_provs[prov_escogido]
+                else:
+                    st.warning("⚠️ No hay proveedores registrados. Ve a la pestaña 'Proveedores' para agregarlos.")
+
                 col_comp1, col_comp2 = st.columns(2)
                 with col_comp1: kilos_comprados = st.number_input("Cantidad (KG/PZ):", min_value=0.001, value=10.000, step=0.500, format="%.3f")
                 with col_comp2: costo_total = st.number_input("Costo Total pagado ($):", min_value=0.0, step=100.0)
                 
-                desc_compra = st.text_input("Nota / Proveedor:", value="Compra a proveedor local")
-                if st.button("🚚 Registrar Entrada de Mercancía", type="primary"):
+                desc_compra = st.text_input("Nota / Factura:", value="Compra de mercancía")
+                if st.button("🚚 Registrar Entrada y Gasto", type="primary"):
                     payload_compra = {
                         "id_producto": opciones_compra[prod_compra],
                         "cantidad": kilos_comprados,
                         "costo_total": costo_total,
-                        "descripcion": f"Resurtido: {desc_compra}"
+                        "descripcion": f"Resurtido: {desc_compra}",
+                        "id_proveedor": id_prov_sel
                     }
                     try:
                         res_c = requests.post(f"{API_URL}/compras/", json=payload_compra)
                         if res_c.status_code == 200:
-                            st.success("¡Mercancía sumada al inventario y registrada en gastos!")
+                            st.success("¡Mercancía sumada al inventario y registrada con éxito!")
                             time.sleep(1.5)
                             st.rerun()
                     except Exception as e: 
@@ -409,8 +424,57 @@ else:
             else:
                 st.warning("Primero debes agregar productos en la pestaña de Inventario.")
 
-        # --- 5. MERMAS ---
+        # --- 5. PROVEEDORES (NUEVA PESTAÑA) ---
         with tabs[4]:
+            st.header("🚚 Directorio de Proveedores")
+            
+            with st.expander("➕ Registrar Nuevo Proveedor"):
+                with st.form("form_proveedor"):
+                    nom_empresa = st.text_input("Nombre de la Empresa / Proveedor:")
+                    contacto_p = st.text_input("Nombre de la persona de contacto:")
+                    tel_p = st.text_input("Teléfono / WhatsApp:")
+                    
+                    if st.form_submit_button("Guardar Proveedor"):
+                        try:
+                            res_pr = requests.post(f"{API_URL}/proveedores/", json={"nombre_empresa": nom_empresa, "contacto": contacto_p, "telefono": tel_p}).json()
+                            if "Error" in res_pr:
+                                st.error(res_pr["Error"])
+                            else:
+                                st.success("¡Proveedor registrado con éxito!")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error("Error al conectar con el servidor.")
+            
+            st.subheader("📋 Lista de Proveedores Registrados")
+            try:
+                provs_data = requests.get(f"{API_URL}/proveedores/").json()
+                if provs_data and isinstance(provs_data, list):
+                    df_p = pd.DataFrame(provs_data)
+                    st.dataframe(df_p[["id_proveedor", "nombre_empresa", "contacto", "telefono", "deuda_pendiente"]].rename(columns={"id_proveedor": "ID", "nombre_empresa": "Empresa", "contacto": "Contacto", "telefono": "Teléfono", "deuda_pendiente": "Deuda Pendiente ($)"}), width=800)
+                    
+                    st.divider()
+                    st.subheader("⚠️ Eliminar Proveedor")
+                    opc_del_p = {f"#{p['id_proveedor']} - {p['nombre_empresa']}": p['id_proveedor'] for p in provs_data}
+                    prov_a_borrar = st.selectbox("Selecciona proveedor a eliminar:", list(opc_del_p.keys()))
+                    if st.button("Eliminar Proveedor", key="btn_borrar_proveedor"):
+                        try:
+                            res_del_p = requests.delete(f"{API_URL}/proveedores/{opc_del_p[prov_a_borrar]}").json()
+                            if "Error" in res_del_p:
+                                st.error(res_del_p["Error"])
+                            else:
+                                st.success("Proveedor eliminado correctamente.")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error("Error de conexión.")
+                else:
+                    st.info("No hay proveedores registrados todavía.")
+            except Exception as e:
+                st.error("Error al cargar la lista de proveedores.")
+
+        # --- 6. MERMAS ---
+        with tabs[5]:
             st.header("Registro de Mermas (Hueso/Grasa)")
             if productos and isinstance(productos, list):
                 opciones_merma = {f"#{p['id']} - {p['nombre']}": p["id"] for p in productos}
@@ -429,8 +493,8 @@ else:
                     except Exception as e: 
                         st.error("Error de servidor.")
 
-        # --- 6. GASTOS ---
-        with tabs[5]:
+        # --- 7. GASTOS ---
+        with tabs[6]:
             st.header("Registro de Gastos y Salidas de Dinero")
             with st.form("form_gastos"):
                 cat_gasto = st.selectbox("Categoría del Gasto:", ["Servicios (Luz, Agua, Internet)", "Flete / Viaje a Central de Abastos", "Mantenimiento de Vehículo", "Empaques, Bolsas y Limpieza", "Sueldos y Viáticos", "Otros"])
@@ -457,8 +521,8 @@ else:
             except Exception as e: 
                 pass
 
-        # --- 7. CAJA Y REPORTES ---
-        with tabs[6]:
+        # --- 8. CAJA Y REPORTES ---
+        with tabs[7]:
             st.header("🧮 Control de Caja y Tablero Financiero")
             
             st.subheader("💵 Turno Actual (Corte de Caja)")
@@ -526,8 +590,8 @@ else:
             except Exception as e:
                 pass
 
-        # --- 8. PERSONAL (CONFIGURACIÓN EXCLUSIVA DE ADMINISTRADOR) ---
-        with tabs[7]:
+        # --- 9. PERSONAL ---
+        with tabs[8]:
             st.header("⚙️ Gestión de Personal y Accesos")
             
             with st.expander("➕ Dar de alta nuevo cajero o administrador"):
@@ -558,7 +622,7 @@ else:
                     st.divider()
                     st.subheader("🗑️ Eliminar Usuario")
                     opciones_del_u = {f"#{u['id_usuario']} - {u['username']} ({u['rol']})": u['id_usuario'] for u in usuarios_data}
-                    usuario_elim = st.selectbox("Selecciona el usuario a borrar:", list(opciones_del_u.keys()))
+                    usuario_elim = st.selectbox("Selecciona el usuario a borrar:", list(opciones_del_u.keys()), key="select_borrar_usuario")
                     
                     if st.button("Eliminar permanentemente", key="btn_borrar_usuario"):
                         try:

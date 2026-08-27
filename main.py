@@ -52,18 +52,19 @@ class GastoNuevo(BaseModel):
     categoria: str
     monto: float
     descripcion: str = ""
+    id_proveedor: Optional[int] = None # <--- NUEVO
 
 class CompraData(BaseModel):
     id_producto: int
     cantidad: float
     costo_total: float
     descripcion: str
+    id_proveedor: Optional[int] = None # <--- NUEVO
 
 class PrecioData(BaseModel):
     precio_compra: float
     precio_venta: float
 
-# --- NUEVOS MODELOS DE USUARIOS ---
 class LoginData(BaseModel):
     username: str
     password: str
@@ -73,6 +74,11 @@ class UsuarioNuevo(BaseModel):
     password: str
     rol: str
 
+class ProveedorNuevo(BaseModel): # <--- NUEVO MODELO
+    nombre_empresa: str
+    contacto: str = ""
+    telefono: str = ""
+
 
 # --- 3. RUTAS / ENDPOINTS ---
 
@@ -80,7 +86,6 @@ class UsuarioNuevo(BaseModel):
 def probar_conexion():
     return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
-# --- NUEVO: RUTAS DE SEGURIDAD Y USUARIOS ---
 @app.post("/login/")
 def iniciar_sesion(datos: LoginData):
     try:
@@ -134,7 +139,38 @@ def eliminar_usuario(id_usuario: int):
     except Exception as e:
         return {"Error": str(e)}
 
-# --- EL RESTO DE TUS RUTAS (CLIENTES, PRODUCTOS, ETC) ---
+# --- NUEVO: RUTAS DE PROVEEDORES ---
+@app.get("/proveedores/")
+def ver_proveedores():
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT id_proveedor, nombre_empresa, contacto, telefono, deuda_pendiente FROM proveedores ORDER BY nombre_empresa ASC"))
+            return [{"id_proveedor": f[0], "nombre_empresa": f[1], "contacto": f[2], "telefono": f[3], "deuda_pendiente": float(f[4])} for f in res.fetchall()]
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.post("/proveedores/")
+def agregar_proveedor(prov: ProveedorNuevo):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO proveedores (nombre_empresa, contacto, telefono) VALUES (:nom, :cont, :tel)"),
+                         {"nom": prov.nombre_empresa, "cont": prov.contacto, "tel": prov.telefono})
+            conn.commit()
+            return {"mensaje": "Proveedor registrado exitosamente"}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.delete("/proveedores/{id_proveedor}")
+def eliminar_proveedor(id_proveedor: int):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM proveedores WHERE id_proveedor = :id"), {"id": id_proveedor})
+            conn.commit()
+            return {"mensaje": "Proveedor eliminado."}
+    except Exception as e:
+        return {"Error": str(e)}
+
+
 @app.get("/clientes/")
 def ver_clientes():
     try:
@@ -253,9 +289,9 @@ def registrar_compra(datos: CompraData):
             """), {"cant": datos.cantidad, "id_p": datos.id_producto})
             
             conn.execute(text("""
-                INSERT INTO gastos (categoria, monto, descripcion)
-                VALUES ('Flete / Viaje a Central de Abastos', :monto, :desc)
-            """), {"monto": datos.costo_total, "desc": datos.descripcion})
+                INSERT INTO gastos (categoria, monto, descripcion, id_proveedor)
+                VALUES ('Compra a Proveedor', :monto, :desc, :prov)
+            """), {"monto": datos.costo_total, "desc": datos.descripcion, "prov": datos.id_proveedor})
             
             conn.commit()
             return {"mensaje": "Compra registrada con éxito."}
@@ -343,8 +379,8 @@ def registrar_merma(merma: MermaNueva):
 def registrar_gasto(gasto: GastoNuevo):
     try:
         with engine.connect() as conexion:
-            res = conexion.execute(text("INSERT INTO gastos (categoria, monto, descripcion) VALUES (:cat, :monto, :desc) RETURNING id_gasto"), 
-                                   {"cat": gasto.categoria, "monto": gasto.monto, "desc": gasto.descripcion})
+            res = conexion.execute(text("INSERT INTO gastos (categoria, monto, descripcion, id_proveedor) VALUES (:cat, :monto, :desc, :prov) RETURNING id_gasto"), 
+                                   {"cat": gasto.categoria, "monto": gasto.monto, "desc": gasto.descripcion, "prov": gasto.id_proveedor})
             conexion.commit()
             return {"mensaje": "Gasto guardado con éxito"}
     except Exception as e:
