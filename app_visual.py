@@ -34,10 +34,14 @@ if not st.session_state.logged_in:
             
             if submit:
                 if usuario == "admin" and password == "1234":
-                    st.session_state.logged_in = True; st.session_state.usuario = "admin"; st.session_state.rol = "Administrador / Dueño"
+                    st.session_state.logged_in = True
+                    st.session_state.usuario = "admin"
+                    st.session_state.rol = "Administrador / Dueño"
                     st.rerun()
                 elif usuario == "cajero" and password == "0000":
-                    st.session_state.logged_in = True; st.session_state.usuario = "cajero"; st.session_state.rol = "Cajero"
+                    st.session_state.logged_in = True
+                    st.session_state.usuario = "cajero"
+                    st.session_state.rol = "Cajero"
                     st.rerun()
                 else:
                     st.error("❌ Usuario o PIN incorrectos")
@@ -48,7 +52,9 @@ else:
         st.write(f"👤 **Usuario:** {st.session_state.usuario}")
         st.divider()
         if st.button("🚪 Cerrar Sesión", use_container_width=True):
-            st.session_state.logged_in = False; st.session_state.usuario = ""; st.session_state.rol = ""
+            st.session_state.logged_in = False
+            st.session_state.usuario = ""
+            st.session_state.rol = ""
             st.rerun()
 
     st.title("🥩 Sistema de Gestión - Carnicería")
@@ -56,10 +62,10 @@ else:
 
     try:
         productos = requests.get(f"{API_URL}/productos/").json()
-    except:
+    except Exception as e:
         productos = []
 
-    # ¡NUEVA PESTAÑA DE CLIENTES!
+    # PESTAÑAS DEL SISTEMA
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes"])
 
     # --- 1. VENTAS ---
@@ -77,19 +83,19 @@ else:
             id_prod = opciones_prod[prod_seleccionado]["id"]
             
             st.divider()
-            # ¡SE AÑADE "FIADO"!
             metodo_pago = st.radio("💳 Método de pago:", ["Efectivo", "Tarjeta", "Transferencia", "Fiado"], horizontal=True)
             
             id_cliente_sel = None
+            cli_escogido = ""
+            
             if metodo_pago == "Transferencia":
                 with st.expander("📲 MOSTRAR CÓDIGO QR AL CLIENTE"):
                     try:
                         st.image("mi_qr.png", width=300)
                         st.info("Escanea el QR con la app de tu banco o Mercado Pago.")
-                    except:
+                    except Exception as e:
                         st.warning("⚠️ Falta subir la imagen 'mi_qr.png' a GitHub.")
             
-            # SI ES FIADO, PREGUNTAMOS A QUIÉN
             elif metodo_pago == "Fiado":
                 try:
                     res_cli = requests.get(f"{API_URL}/clientes/").json()
@@ -99,7 +105,7 @@ else:
                         id_cliente_sel = opc_cli[cli_escogido]
                     else:
                         st.error("⚠️ No hay clientes. Ve a la pestaña 'Clientes' para agregarlos primero.")
-                except:
+                except Exception as e:
                     st.error("Error al cargar clientes.")
             
             st.info(f"**Total a cobrar:** ${(cantidad * precio_venta):,.2f} MXN")
@@ -120,14 +126,38 @@ else:
                         if res.status_code == 200:
                             id_venta = res.json().get("id_venta")
                             st.success(f"¡Venta exitosa ({metodo_pago})!")
-                            time.sleep(1.5)
-                            st.rerun()
-                    except:
-                        st.error("Error al cobrar.")
+                            
+                            # --- GENERACIÓN DEL TICKET ---
+                            res_ticket = requests.get(f"{API_URL}/tickets/{id_venta}").json()
+                            if "Error" not in res_ticket:
+                                st.markdown("---")
+                                st.markdown("<h2 style='text-align: center;'>🧾 TICKET DE VENTA</h2>", unsafe_allow_html=True)
+                                st.write(f"**Folio:** #{res_ticket['id_venta']} | **Fecha:** {res_ticket['fecha'][:16]}")
+                                st.write(f"**Pagado mediante:** {metodo_pago}")
+                                if metodo_pago == "Fiado":
+                                    st.write(f"**Cargado a la cuenta de:** {cli_escogido}")
+                                st.divider()
+                                for d in res_ticket['detalles']:
+                                    nombre_limpio = str(d['producto']).strip() 
+                                    st.write(f"🥩 **{nombre_limpio}**")
+                                    st.write(f"{d['cantidad']} KG x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
+                                st.divider()
+                                st.markdown(f"<h3 style='text-align: right;'>TOTAL: ${res_ticket['total']:,.2f} MXN</h3>", unsafe_allow_html=True)
+                                st.markdown("---")
+                                
+                                if st.button("🔄 Iniciar Nueva Venta"):
+                                    st.rerun()
+                            else:
+                                time.sleep(1.5)
+                                st.rerun()
+                        else:
+                            st.error("Error al registrar la venta en la base de datos.")
+                    except Exception as e:
+                        st.error("Error de conexión con el servidor al cobrar.")
         else:
-            st.warning("No hay productos.")
+            st.warning("No hay productos registrados en el inventario.")
 
-    # --- 2. LIBRETA DE CLIENTES Y FIADOS (¡LA NUEVA PESTAÑA!) ---
+    # --- 2. LIBRETA DE CLIENTES Y FIADOS ---
     with tab2:
         st.header("📒 Libreta de Clientes y Deudores")
         
@@ -136,14 +166,18 @@ else:
                 nom_c = st.text_input("Nombre del Cliente o Negocio (Ej. Taquería El Primo):")
                 tel_c = st.text_input("Teléfono / WhatsApp (Opcional):")
                 if st.form_submit_button("Guardar Cliente"):
-                    res_c = requests.post(f"{API_URL}/clientes/", json={"nombre": nom_c, "telefono": tel_c})
-                    if "Error" not in res_c.json():
-                        st.success("¡Cliente guardado exitosamente!")
-                        time.sleep(1); st.rerun()
+                    try:
+                        res_c = requests.post(f"{API_URL}/clientes/", json={"nombre": nom_c, "telefono": tel_c})
+                        if "Error" not in res_c.json():
+                            st.success("¡Cliente guardado exitosamente!")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error("Error al conectar con el servidor.")
         
         try:
             clientes_data = requests.get(f"{API_URL}/clientes/").json()
-        except:
+        except Exception as e:
             clientes_data = []
 
         st.subheader("👥 Lista de Clientes")
@@ -165,13 +199,17 @@ else:
                     metodo_abono = st.selectbox("¿Cómo pagó el abono?", ["Efectivo", "Tarjeta", "Transferencia"])
                     
                     if st.button("📥 Recibir Abono", type="primary"):
-                        res_ab = requests.post(f"{API_URL}/clientes/{opciones_abono[cliente_abono]['id']}/abono", 
-                                               json={"monto": monto_abono, "metodo_pago": metodo_abono})
-                        if "Error" not in res_ab.json():
-                            st.success("¡Abono registrado! El dinero se sumó a tu Caja.")
-                            time.sleep(1.5); st.rerun()
-                        else:
-                            st.error(res_ab.json()["Error"])
+                        try:
+                            res_ab = requests.post(f"{API_URL}/clientes/{opciones_abono[cliente_abono]['id']}/abono", 
+                                                   json={"monto": monto_abono, "metodo_pago": metodo_abono})
+                            if "Error" not in res_ab.json():
+                                st.success("¡Abono registrado! El dinero se sumó a tu Caja.")
+                                time.sleep(1.5)
+                                st.rerun()
+                            else:
+                                st.error(res_ab.json()["Error"])
+                        except Exception as e:
+                            st.error("Error al conectar con el servidor.")
                 else:
                     st.info("🏆 ¡Nadie te debe dinero actualmente!")
             
@@ -181,53 +219,193 @@ else:
                 opciones_del_cli = {f"#{c['id']} - {c['nombre']}": c['id'] for c in clientes_data}
                 cliente_elim = st.selectbox("Cliente a borrar:", list(opciones_del_cli.keys()))
                 if st.button("Eliminar permanentemente"):
-                    res_del = requests.delete(f"{API_URL}/clientes/{opciones_del_cli[cliente_elim]}")
-                    if "Error" in res_del.json():
-                        st.error(res_del.json()["Error"]) # Seguro Antibobadas
-                    else:
-                        st.success("Cliente eliminado.")
-                        time.sleep(1); st.rerun()
+                    try:
+                        res_del = requests.delete(f"{API_URL}/clientes/{opciones_del_cli[cliente_elim]}")
+                        if "Error" in res_del.json():
+                            st.error(res_del.json()["Error"]) 
+                        else:
+                            st.success("Cliente eliminado.")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error("Error al conectar con el servidor.")
         else:
             st.info("No hay clientes en tu libreta. Agrega uno arriba.")
 
     # --- 3. INVENTARIO ---
     with tab3:
         st.header("Catálogo y Existencias")
-        # (Se mantiene igual, resumido aquí para que funcione tu app)
+        
+        with st.expander("➕ Agregar Nuevo Producto"):
+            with st.form("form_nuevo_producto"):
+                nombre = st.text_input("Nombre del Producto:")
+                categoria = st.selectbox("Categoría:", [("Res", 1), ("Cerdo", 2), ("Pollo", 3), ("Procesados", 4)], format_func=lambda x: x[0])
+                col_c1, col_c2, col_c3 = st.columns(3)
+                with col_c1: precio_c = st.number_input("Costo Proveedor por KG ($):", min_value=0.0, step=1.0)
+                with col_c2: precio_v = st.number_input("Precio al Público por KG ($):", min_value=0.0, step=1.0)
+                with col_c3: stock_ini = st.number_input("Kilos iniciales (KG):", min_value=0.0, step=0.001, format="%.3f")
+                    
+                if st.form_submit_button("Guardar Producto"):
+                    payload_prod = {"nombre": nombre, "id_categoria": categoria[1], "precio_compra": precio_c, "precio_venta": precio_v, "stock_actual": stock_ini, "unidad_medida": "KG"}
+                    try:
+                        res_post = requests.post(f"{API_URL}/productos/", json=payload_prod)
+                        if "Error" in res_post.json(): 
+                            st.error(f"Error: {res_post.json()['Detalle']}")
+                        else:
+                            st.success("¡Producto guardado!")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e: 
+                        st.error("Error de servidor.")
+        
+        with st.expander("✏️ Editar Precios de un Producto"):
+            if productos and isinstance(productos, list):
+                opciones_edit = {f"#{p['id']} - {p['nombre']}": p for p in productos}
+                prod_edit_nombre = st.selectbox("Selecciona el producto a modificar:", list(opciones_edit.keys()), key="edit_box")
+                prod_data = opciones_edit[prod_edit_nombre]
+                
+                val_compra = float(prod_data.get('precio_compra') or 0.0)
+                val_venta = float(prod_data.get('precio_venta') or 0.0)
+                
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    nuevo_precio_c = st.number_input("Costo Proveedor Actualizado ($):", min_value=0.0, value=val_compra, step=1.0)
+                with col_e2:
+                    nuevo_precio_v = st.number_input("Precio al Público Actualizado ($):", min_value=0.0, value=val_venta, step=1.0)
+                    
+                if st.button("💾 Guardar Nuevos Precios"):
+                    payload_edit = {"precio_compra": nuevo_precio_c, "precio_venta": nuevo_precio_v}
+                    try:
+                        res_edit = requests.put(f"{API_URL}/productos/{prod_data['id']}", json=payload_edit)
+                        if res_edit.status_code == 200:
+                            st.success("¡Precios actualizados con éxito!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Error al actualizar.")
+                    except Exception as e:
+                        st.error("Error de conexión al servidor.")
+            else:
+                st.info("Agrega productos primero para poder editarlos.")
+
+        st.subheader("Existencias Actuales")
         if productos and isinstance(productos, list):
             df = pd.DataFrame(productos)
             try:
                 df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio Público ($)", "stock_actual": "Stock (KG)"})
                 st.dataframe(df[["id", "Producto", "Categoría", "Precio Público ($)", "Stock (KG)"]])
-            except: st.dataframe(df)
+            except Exception as e: 
+                st.dataframe(df)
+            
+        st.divider()
+        st.subheader("⚠️ Eliminar Producto")
+        if productos and isinstance(productos, list):
+            opciones_del = {f"#{p['id']} - {p['nombre']}": p["id"] for p in productos}
+            prod_del = st.selectbox("Producto a eliminar:", list(opciones_del.keys()), key="del_box_2")
+            
+            if st.button("🗑️ Borrar del Inventario"):
+                try:
+                    res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}")
+                    datos_res = res_del.json()
+                    if "Error" in datos_res:
+                        st.error(f"No se puede borrar el producto porque ya tiene ventas o movimientos registrados. (Protección contable).")
+                    elif res_del.status_code == 200:
+                        st.success("¡Producto eliminado correctamente!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Ocurrió un problema desconocido al eliminar.")
+                except Exception as e: 
+                    st.error("Error de conexión con el servidor.")
 
     # --- 4. COMPRAS ---
     with tab4:
         st.header("📦 Ingresar Nueva Mercancía (Resurtir)")
+        st.write("¿Llegaste de la Central de Abastos? Registra aquí los kilos que compraste para sumarlos a tu inventario.")
         if productos and isinstance(productos, list):
             opciones_compra = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']} KG)": p["id"] for p in productos}
             prod_compra = st.selectbox("¿Qué producto estás resurtiendo?", list(opciones_compra.keys()), key="compra_box")
-            c1, c2 = st.columns(2)
-            with c1: kilos_comprados = st.number_input("Kilos (KG):", min_value=0.001, value=10.000, step=0.500, format="%.3f")
-            with c2: costo_total = st.number_input("Costo Total ($):", min_value=0.0, step=100.0)
+            
+            col_comp1, col_comp2 = st.columns(2)
+            with col_comp1: kilos_comprados = st.number_input("Kilos que compraste (KG):", min_value=0.001, value=10.000, step=0.500, format="%.3f")
+            with col_comp2: costo_total = st.number_input("¿Cuánto pagaste en total por estos kilos? ($):", min_value=0.0, step=100.0)
+            
+            desc_compra = st.text_input("Nota / Proveedor:", value="Compra a proveedor local")
             if st.button("🚚 Registrar Entrada de Mercancía", type="primary"):
+                payload_compra = {
+                    "id_producto": opciones_compra[prod_compra],
+                    "cantidad": kilos_comprados,
+                    "costo_total": costo_total,
+                    "descripcion": f"Resurtido: {desc_compra}"
+                }
                 try:
-                    requests.post(f"{API_URL}/compras/", json={"id_producto": opciones_compra[prod_compra], "cantidad": kilos_comprados, "costo_total": costo_total, "descripcion": "Resurtido"})
-                    st.success("¡Mercancía sumada!"); time.sleep(1); st.rerun()
-                except: st.error("Error al conectar.")
+                    res_c = requests.post(f"{API_URL}/compras/", json=payload_compra)
+                    if res_c.status_code == 200:
+                        st.success("¡Mercancía sumada al inventario y dinero registrado en gastos exitosamente!")
+                        time.sleep(1.5)
+                        st.rerun()
+                    else:
+                        st.error("Problema al registrar la compra.")
+                except Exception as e: 
+                    st.error("Error al conectar con el servidor.")
+        else:
+            st.warning("Primero debes agregar productos en la pestaña de Inventario.")
 
     # --- 5. MERMAS ---
     with tab5:
         st.header("Registro de Mermas (Hueso/Grasa)")
+        if productos and isinstance(productos, list):
+            opciones_merma = {f"#{p['id']} - {p['nombre']}": p["id"] for p in productos}
+            prod_merma = st.selectbox("¿De qué corte salió la merma?", list(opciones_merma.keys()), key="merma_box")
+            peso_merma = st.number_input("Peso de la merma (KG):", min_value=0.0, value=0.500, step=0.001, format="%.3f")
+            desc_merma = st.text_input("Descripción:", value="Recorte de grasa y hueso")
+            
+            if st.button("🗑️ Registrar Merma", type="primary"):
+                payload_merma = {"id_producto": opciones_merma[prod_merma], "peso_merma": peso_merma, "descripcion": desc_merma}
+                try:
+                    res_m = requests.post(f"{API_URL}/mermas/", json=payload_merma)
+                    if res_m.status_code == 200:
+                        st.success("¡Merma registrada!")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e: 
+                    st.error("Error de servidor.")
 
     # --- 6. GASTOS ---
     with tab6:
         st.header("Registro de Gastos y Salidas de Dinero")
+        with st.form("form_gastos"):
+            cat_gasto = st.selectbox("Categoría del Gasto:", ["Servicios (Luz, Agua, Internet)", "Flete / Viaje a Central de Abastos", "Mantenimiento de Vehículo", "Empaques, Bolsas y Limpieza", "Sueldos y Viáticos", "Otros"])
+            monto_gasto = st.number_input("Monto total gastado ($):", min_value=0.0, step=50.0)
+            desc_gasto = st.text_input("Descripción:")
+            
+            if st.form_submit_button("💸 Registrar Gasto", type="primary"):
+                payload_gasto = {"categoria": cat_gasto, "monto": monto_gasto, "descripcion": desc_gasto}
+                try:
+                    res_g = requests.post(f"{API_URL}/gastos/", json=payload_gasto)
+                    if res_g.status_code == 200:
+                        st.success("¡Gasto registrado exitosamente!")
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e: 
+                    st.error("Error de servidor.")
+                    
+        st.divider()
+        st.subheader("📋 Historial de Gastos")
+        try:
+            gastos_data = requests.get(f"{API_URL}/gastos/").json()
+            if gastos_data and isinstance(gastos_data, list):
+                st.dataframe(pd.DataFrame(gastos_data), width="stretch")
+        except Exception as e: 
+            pass
 
     # --- 7. CAJA Y REPORTES ---
     with tab7:
         st.header("🧮 Control de Caja y Tablero Financiero")
+        
         st.subheader("💵 Turno Actual (Corte de Caja)")
+        st.write("Registra con cuánto dinero abriste la caja hoy para saber cuánto efectivo exacto deberías tener.")
+        
         fondo_inicial = st.number_input("Fondo de caja inicial (Morralla) $:", min_value=0.0, step=50.0, value=500.0)
         
         if st.button("⚖️ Hacer Corte de Caja de HOY", type="primary"):
@@ -241,13 +419,42 @@ else:
                     efectivo_esperado = fondo_inicial + ventas_efectivo - gastos_hoy
                     
                     st.info("### 💰 Resultado del Corte de Caja (Físico)")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("1. Fondo Inicial", f"${fondo_inicial:,.2f}")
-                    c2.metric("2. Entradas (EFECTIVO)", f"+ ${ventas_efectivo:,.2f}")
-                    c3.metric("3. Salidas (Gastos)", f"- ${gastos_hoy:,.2f}")
-                    c4.metric("EFECTIVO EN CAJÓN", f"${efectivo_esperado:,.2f}")
-                    st.warning(f"**Instrucción:** Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas.")
+                    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                    col_r1.metric("1. Fondo Inicial", f"${fondo_inicial:,.2f}")
+                    col_r2.metric("2. Entradas (EFECTIVO)", f"+ ${ventas_efectivo:,.2f}")
+                    col_r3.metric("3. Salidas (Gastos)", f"- ${gastos_hoy:,.2f}")
+                    col_r4.metric("EFECTIVO EN CAJÓN", f"${efectivo_esperado:,.2f}")
+                    
+                    st.warning(f"**Instrucción:** Abre el cajón. Debes tener exactamente **${efectivo_esperado:,.2f} MXN** en billetes y monedas.")
+                    st.success(f"💳 **Dinero extra seguro en Banco (Tarjetas/Transferencias):** ${ventas_banco:,.2f} MXN")
                 else: 
                     st.error(f"Error del motor: {res_rep['Error']}")
-            except: 
+            except Exception as e: 
                 st.error("Error al generar el corte de caja.")
+        
+        st.divider()
+        st.subheader("📊 Reportes Financieros Generales")
+        periodo_sel = st.selectbox("📅 Selecciona el periodo histórico:", ["Semana", "Mes", "General"])
+        
+        if st.button("🔄 Ver Historial Financiero"):
+            try:
+                res_rep = requests.get(f"{API_URL}/reportes/?periodo={periodo_sel}").json()
+                if "Error" not in res_rep:
+                    col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+                    col_h1.metric("Ingresos Totales", f"${res_rep.get('ventas_totales', 0):,.2f}")
+                    col_h2.metric("Salidas (Gastos)", f"${res_rep.get('gastos', 0):,.2f}")
+                    col_h3.metric("Pérdida (Mermas)", f"${res_rep.get('mermas', 0):,.2f}")
+                    col_h4.metric("GANANCIA NETA", f"${res_rep.get('ganancia_neta', 0):,.2f}")
+                    
+                    st.divider()
+                    st.subheader(f"📈 ¿En qué se va el dinero? (Periodo: {periodo_sel})")
+                    if res_rep.get("detalle_gastos"):
+                        df_g = pd.DataFrame(res_rep["detalle_gastos"]).groupby("categoria").sum().reset_index()
+                        st.bar_chart(df_g, x="categoria", y="monto")
+                    else: 
+                        st.info(f"No hay gastos registrados para el periodo: {periodo_sel}.")
+                else: 
+                    st.error(f"Error del motor: {res_rep['Error']}")
+            except Exception as e: 
+                st.error("Error al generar el reporte histórico.")
+                
