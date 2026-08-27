@@ -68,16 +68,38 @@ else:
     # PESTAÑAS DEL SISTEMA
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes"])
 
-    # --- 1. VENTAS ---
+    # --- 1. VENTAS (CON ESCÁNER) ---
     with tab1:
         st.header("🛒 Registrar Venta")
+        
         if productos and isinstance(productos, list):
+            # --- LÓGICA DEL LECTOR DE CÓDIGOS DE BARRAS ---
+            st.info("💡 **Tip:** Haz clic en la caja de abajo y usa tu pistola lectora para buscar rápido.")
+            codigo_escaneado = st.text_input("🔍 Escáner de Código de Barras (Opcional):", value="", key="scanner_venta")
+            
+            indice_producto = 0 # Por defecto selecciona el primero de la lista
+            
+            if codigo_escaneado != "":
+                encontrado = False
+                for i, p in enumerate(productos):
+                    if str(p.get("codigo_barras")) == str(codigo_escaneado):
+                        indice_producto = i
+                        encontrado = True
+                        st.success(f"✅ Producto detectado: **{p['nombre']}**")
+                        break
+                if not encontrado:
+                    st.warning("⚠️ Código no reconocido en el inventario.")
+            
+            st.divider()
+            
             opciones_prod = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']:.3f} KG)": p for p in productos}
-            prod_seleccionado = st.selectbox("Selecciona el corte de carne:", list(opciones_prod.keys()))
+            
+            # El selectbox ahora se actualiza automáticamente si el escáner encuentra algo
+            prod_seleccionado = st.selectbox("🥩 Selecciona el producto manualmente (o usa el escáner):", list(opciones_prod.keys()), index=indice_producto)
             
             col1, col2 = st.columns(2)
             with col1:
-                cantidad = st.number_input("Cantidad (KG):", min_value=0.001, value=1.000, step=0.001, format="%.3f")
+                cantidad = st.number_input("Cantidad (KG / Piezas):", min_value=0.001, value=1.000, step=0.001, format="%.3f")
             
             precio_venta = opciones_prod[prod_seleccionado]["precio_venta"]
             id_prod = opciones_prod[prod_seleccionado]["id"]
@@ -127,7 +149,6 @@ else:
                             id_venta = res.json().get("id_venta")
                             st.success(f"¡Venta exitosa ({metodo_pago})!")
                             
-                            # --- GENERACIÓN DEL TICKET ---
                             res_ticket = requests.get(f"{API_URL}/tickets/{id_venta}").json()
                             if "Error" not in res_ticket:
                                 st.markdown("---")
@@ -140,7 +161,7 @@ else:
                                 for d in res_ticket['detalles']:
                                     nombre_limpio = str(d['producto']).strip() 
                                     st.write(f"🥩 **{nombre_limpio}**")
-                                    st.write(f"{d['cantidad']} KG x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
+                                    st.write(f"{d['cantidad']} KG/PZ x ${d['precio_unitario']:,.2f} = **${d['subtotal']:,.2f} MXN**")
                                 st.divider()
                                 st.markdown(f"<h3 style='text-align: right;'>TOTAL: ${res_ticket['total']:,.2f} MXN</h3>", unsafe_allow_html=True)
                                 st.markdown("---")
@@ -163,7 +184,7 @@ else:
         
         with st.expander("➕ Registrar Nuevo Cliente"):
             with st.form("form_cliente"):
-                nom_c = st.text_input("Nombre del Cliente o Negocio (Ej. Taquería El Primo):")
+                nom_c = st.text_input("Nombre del Cliente o Negocio:")
                 tel_c = st.text_input("Teléfono / WhatsApp (Opcional):")
                 if st.form_submit_button("Guardar Cliente"):
                     try:
@@ -188,7 +209,6 @@ else:
             st.divider()
             c1, c2 = st.columns(2)
             
-            # ABONOS
             with c1:
                 st.subheader("💰 Registrar un Abono")
                 opciones_abono = {f"#{c['id']} - {c['nombre']} (Debe: ${c['deuda_total']:,.2f})": c for c in clientes_data if c['deuda_total'] > 0}
@@ -209,11 +229,10 @@ else:
                             else:
                                 st.error(res_ab.json()["Error"])
                         except Exception as e:
-                            st.error("Error al conectar con el servidor.")
+                            st.error("Error al conectar.")
                 else:
                     st.info("🏆 ¡Nadie te debe dinero actualmente!")
             
-            # ELIMINAR
             with c2:
                 st.subheader("🗑️ Eliminar Cliente")
                 opciones_del_cli = {f"#{c['id']} - {c['nombre']}": c['id'] for c in clientes_data}
@@ -228,25 +247,33 @@ else:
                             time.sleep(1)
                             st.rerun()
                     except Exception as e:
-                        st.error("Error al conectar con el servidor.")
+                        st.error("Error al conectar.")
         else:
             st.info("No hay clientes en tu libreta. Agrega uno arriba.")
 
-    # --- 3. INVENTARIO ---
+    # --- 3. INVENTARIO (CON CÓDIGO DE BARRAS) ---
     with tab3:
         st.header("Catálogo y Existencias")
         
-        with st.expander("➕ Agregar Nuevo Producto"):
+        with st.expander("➕ Agregar Nuevo Producto (Con Lector)"):
             with st.form("form_nuevo_producto"):
                 nombre = st.text_input("Nombre del Producto:")
-                categoria = st.selectbox("Categoría:", [("Res", 1), ("Cerdo", 2), ("Pollo", 3), ("Procesados", 4)], format_func=lambda x: x[0])
+                categoria = st.selectbox("Categoría:", [("Res", 1), ("Cerdo", 2), ("Pollo", 3), ("Procesados/Abarrotes", 4)], format_func=lambda x: x[0])
+                # ¡NUEVO CAMPO AQUÍ!
+                codigo_barras = st.text_input("Código de Barras (opcional - usa el escáner aquí):")
+                
                 col_c1, col_c2, col_c3 = st.columns(3)
-                with col_c1: precio_c = st.number_input("Costo Proveedor por KG ($):", min_value=0.0, step=1.0)
-                with col_c2: precio_v = st.number_input("Precio al Público por KG ($):", min_value=0.0, step=1.0)
-                with col_c3: stock_ini = st.number_input("Kilos iniciales (KG):", min_value=0.0, step=0.001, format="%.3f")
+                with col_c1: precio_c = st.number_input("Costo Proveedor por KG/PZ ($):", min_value=0.0, step=1.0)
+                with col_c2: precio_v = st.number_input("Precio al Público por KG/PZ ($):", min_value=0.0, step=1.0)
+                with col_c3: stock_ini = st.number_input("Stock inicial (KG/PZ):", min_value=0.0, step=0.001, format="%.3f")
                     
                 if st.form_submit_button("Guardar Producto"):
-                    payload_prod = {"nombre": nombre, "id_categoria": categoria[1], "precio_compra": precio_c, "precio_venta": precio_v, "stock_actual": stock_ini, "unidad_medida": "KG"}
+                    payload_prod = {
+                        "nombre": nombre, "id_categoria": categoria[1], 
+                        "precio_compra": precio_c, "precio_venta": precio_v, 
+                        "stock_actual": stock_ini, "unidad_medida": "KG",
+                        "codigo_barras": codigo_barras
+                    }
                     try:
                         res_post = requests.post(f"{API_URL}/productos/", json=payload_prod)
                         if "Error" in res_post.json(): 
@@ -292,8 +319,9 @@ else:
         if productos and isinstance(productos, list):
             df = pd.DataFrame(productos)
             try:
-                df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio Público ($)", "stock_actual": "Stock (KG)"})
-                st.dataframe(df[["id", "Producto", "Categoría", "Precio Público ($)", "Stock (KG)"]])
+                # Mostramos también la columna del código de barras si la quieres ver
+                df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio ($)", "stock_actual": "Stock", "codigo_barras": "Cód. Barras"})
+                st.dataframe(df[["id", "Producto", "Cód. Barras", "Categoría", "Precio ($)", "Stock"]])
             except Exception as e: 
                 st.dataframe(df)
             
@@ -308,27 +336,24 @@ else:
                     res_del = requests.delete(f"{API_URL}/productos/{opciones_del[prod_del]}")
                     datos_res = res_del.json()
                     if "Error" in datos_res:
-                        st.error(f"No se puede borrar el producto porque ya tiene ventas o movimientos registrados. (Protección contable).")
+                        st.error(f"No se puede borrar el producto porque ya tiene ventas asociadas.")
                     elif res_del.status_code == 200:
                         st.success("¡Producto eliminado correctamente!")
                         time.sleep(1)
                         st.rerun()
-                    else:
-                        st.error("Ocurrió un problema desconocido al eliminar.")
                 except Exception as e: 
                     st.error("Error de conexión con el servidor.")
 
     # --- 4. COMPRAS ---
     with tab4:
         st.header("📦 Ingresar Nueva Mercancía (Resurtir)")
-        st.write("¿Llegaste de la Central de Abastos? Registra aquí los kilos que compraste para sumarlos a tu inventario.")
         if productos and isinstance(productos, list):
-            opciones_compra = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']} KG)": p["id"] for p in productos}
+            opciones_compra = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']} KG/PZ)": p["id"] for p in productos}
             prod_compra = st.selectbox("¿Qué producto estás resurtiendo?", list(opciones_compra.keys()), key="compra_box")
             
             col_comp1, col_comp2 = st.columns(2)
-            with col_comp1: kilos_comprados = st.number_input("Kilos que compraste (KG):", min_value=0.001, value=10.000, step=0.500, format="%.3f")
-            with col_comp2: costo_total = st.number_input("¿Cuánto pagaste en total por estos kilos? ($):", min_value=0.0, step=100.0)
+            with col_comp1: kilos_comprados = st.number_input("Cantidad (KG/PZ):", min_value=0.001, value=10.000, step=0.500, format="%.3f")
+            with col_comp2: costo_total = st.number_input("Costo Total pagado ($):", min_value=0.0, step=100.0)
             
             desc_compra = st.text_input("Nota / Proveedor:", value="Compra a proveedor local")
             if st.button("🚚 Registrar Entrada de Mercancía", type="primary"):
@@ -341,11 +366,9 @@ else:
                 try:
                     res_c = requests.post(f"{API_URL}/compras/", json=payload_compra)
                     if res_c.status_code == 200:
-                        st.success("¡Mercancía sumada al inventario y dinero registrado en gastos exitosamente!")
+                        st.success("¡Mercancía sumada al inventario y registrada en gastos!")
                         time.sleep(1.5)
                         st.rerun()
-                    else:
-                        st.error("Problema al registrar la compra.")
                 except Exception as e: 
                     st.error("Error al conectar con el servidor.")
         else:
@@ -457,4 +480,3 @@ else:
                     st.error(f"Error del motor: {res_rep['Error']}")
             except Exception as e: 
                 st.error("Error al generar el reporte histórico.")
-                

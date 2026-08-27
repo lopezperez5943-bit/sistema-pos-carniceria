@@ -23,6 +23,7 @@ class ProductoNuevo(BaseModel):
     precio_venta: float
     stock_actual: float = 0.000 
     unidad_medida: str = "KG"
+    codigo_barras: str = ""  # <--- ¡NUEVO CAMPO!
 
 class DetalleVenta(BaseModel):
     id_producto: int
@@ -32,7 +33,7 @@ class DetalleVenta(BaseModel):
 class VentaNueva(BaseModel):
     detalles: List[DetalleVenta]
     metodo_pago: str = "Efectivo"
-    id_cliente: Optional[int] = None  # <--- Para ligar la venta a un cliente
+    id_cliente: Optional[int] = None 
 
 class ClienteNuevo(BaseModel):
     nombre: str
@@ -69,7 +70,6 @@ class PrecioData(BaseModel):
 def probar_conexion():
     return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
-# --- NUEVO: LIBRETA DE CLIENTES Y FIADOS ---
 @app.get("/clientes/")
 def ver_clientes():
     try:
@@ -94,7 +94,6 @@ def agregar_cliente(cliente: ClienteNuevo):
 def eliminar_cliente(id_cliente: int):
     try:
         with engine.connect() as conn:
-            # 🛡️ Seguro antibobadas: Verificar que no deba dinero
             res = conn.execute(text("SELECT deuda_total FROM clientes WHERE id_cliente = :id"), {"id": id_cliente}).fetchone()
             if res and res[0] > 0:
                 return {"Error": "Este cliente aún tiene deuda. Debe liquidarla antes de poder eliminarlo."}
@@ -103,17 +102,14 @@ def eliminar_cliente(id_cliente: int):
             conn.commit()
             return {"mensaje": "Cliente eliminado permanentemente."}
     except Exception as e:
-        return {"Error": "No se pudo eliminar al cliente. Quizá tiene historial de compras ligado."}
+        return {"Error": "No se pudo eliminar al cliente."}
 
 @app.post("/clientes/{id_cliente}/abono")
 def registrar_abono(id_cliente: int, datos: AbonoData):
     try:
         with engine.connect() as conn:
-            # 1. Restamos la deuda al cliente
             conn.execute(text("UPDATE clientes SET deuda_total = deuda_total - :monto WHERE id_cliente = :id_c"),
                          {"monto": datos.monto, "id_c": id_cliente})
-            
-            # 2. Guardamos el dinero como una venta especial para que entre al Corte de Caja
             conn.execute(text("""
                 INSERT INTO ventas (total, metodo_pago, id_cliente) 
                 VALUES (:monto, :pago, :id_c)
@@ -124,22 +120,23 @@ def registrar_abono(id_cliente: int, datos: AbonoData):
     except Exception as e:
         return {"Error": str(e)}
 
-# --- EL RESTO DEL SISTEMA ---
 @app.post("/productos/")
 def agregar_producto(producto: ProductoNuevo):
     try:
         with engine.connect() as conexion:
+            # ¡MODIFICADO PARA GUARDAR CÓDIGO DE BARRAS!
             query = text("""
-                INSERT INTO productos (nombre, id_categoria, precio_compra, precio_venta, stock_actual, unidad_medida) 
-                VALUES (:nom, :cat, :compra, :venta, :stock, :unidad) RETURNING id_producto
+                INSERT INTO productos (nombre, id_categoria, precio_compra, precio_venta, stock_actual, unidad_medida, codigo_barras) 
+                VALUES (:nom, :cat, :compra, :venta, :stock, :unidad, :codigo) RETURNING id_producto
             """)
             res = conexion.execute(query, {
                 "nom": producto.nombre, "cat": producto.id_categoria,
                 "compra": producto.precio_compra, "venta": producto.precio_venta,
-                "stock": producto.stock_actual, "unidad": producto.unidad_medida
+                "stock": producto.stock_actual, "unidad": producto.unidad_medida,
+                "codigo": producto.codigo_barras
             })
             conexion.commit() 
-            return {"mensaje": "¡Corte de carne agregado!", "id_producto": res.fetchone()[0]}
+            return {"mensaje": "¡Producto agregado!", "id_producto": res.fetchone()[0]}
     except Exception as e:
         return {"Error": "No se pudo guardar", "Detalle": str(e)}
 
@@ -147,13 +144,14 @@ def agregar_producto(producto: ProductoNuevo):
 def ver_productos():
     try:
         with engine.connect() as conexion:
+            # ¡MODIFICADO PARA ENVIAR EL CÓDIGO DE BARRAS A LA PANTALLA!
             res = conexion.execute(text("""
-                SELECT p.id_producto, p.nombre, c.nombre as categoria, p.precio_venta, p.stock_actual, p.precio_compra 
+                SELECT p.id_producto, p.nombre, c.nombre as categoria, p.precio_venta, p.stock_actual, p.precio_compra, p.codigo_barras
                 FROM productos p
                 JOIN categorias c ON p.id_categoria = c.id_categoria
                 ORDER BY p.nombre ASC
             """))
-            return [{"id": f[0], "nombre": f[1], "categoria": f[2], "precio_venta": float(f[3]), "stock_actual": float(f[4]), "precio_compra": float(f[5])} for f in res.fetchall()]
+            return [{"id": f[0], "nombre": f[1], "categoria": f[2], "precio_venta": float(f[3]), "stock_actual": float(f[4]), "precio_compra": float(f[5]), "codigo_barras": f[6]} for f in res.fetchall()]
     except Exception as e:
         return {"Error": str(e)}
 
@@ -234,7 +232,6 @@ def registrar_venta(datos: VentaNueva):
             conn.execute(text("UPDATE ventas SET total = :tot WHERE id_venta = :id_v"), 
                          {"tot": total_venta, "id_v": id_venta})
             
-            # NUEVO: Si fue fiado, sumarle la deuda al cliente
             if datos.metodo_pago == "Fiado" and datos.id_cliente:
                 conn.execute(text("UPDATE clientes SET deuda_total = deuda_total + :tot WHERE id_cliente = :id_c"),
                              {"tot": total_venta, "id_c": datos.id_cliente})
@@ -316,7 +313,6 @@ def ver_reportes(periodo: str = "General"):
             filtro_mermas = filtro.replace("fecha", "m.fecha")
             mermas = conexion.execute(text(f"SELECT m.peso_merma, p.precio_compra FROM mermas m JOIN productos p ON m.id_producto = p.id_producto {filtro_mermas}")).fetchall()
             
-            # ¡EL DINERO FIADO NO ENTRA A LA CAJA HASTA QUE SE ABONE!
             t_ventas_efectivo = sum([float(v[0]) for v in ventas if v[1] in ['Efectivo', 'Abono Efectivo'] or v[1] is None])
             t_ventas_banco = sum([float(v[0]) for v in ventas if v[1] in ['Tarjeta', 'Transferencia', 'Abono Tarjeta', 'Abono Transferencia']])
             t_ventas_total = t_ventas_efectivo + t_ventas_banco
