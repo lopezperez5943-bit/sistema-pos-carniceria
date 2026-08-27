@@ -63,6 +63,16 @@ class PrecioData(BaseModel):
     precio_compra: float
     precio_venta: float
 
+# --- NUEVOS MODELOS DE USUARIOS ---
+class LoginData(BaseModel):
+    username: str
+    password: str
+
+class UsuarioNuevo(BaseModel):
+    username: str
+    password: str
+    rol: str
+
 
 # --- 3. RUTAS / ENDPOINTS ---
 
@@ -70,6 +80,61 @@ class PrecioData(BaseModel):
 def probar_conexion():
     return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
+# --- NUEVO: RUTAS DE SEGURIDAD Y USUARIOS ---
+@app.post("/login/")
+def iniciar_sesion(datos: LoginData):
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT rol FROM usuarios WHERE username = :u AND password = :p"),
+                               {"u": datos.username, "p": datos.password}).fetchone()
+            if res:
+                return {"rol": res[0]}
+            else:
+                return {"Error": "Usuario o contraseña incorrectos"}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.get("/usuarios/")
+def ver_usuarios():
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT id_usuario, username, rol FROM usuarios ORDER BY id_usuario ASC"))
+            return [{"id_usuario": f[0], "username": f[1], "rol": f[2]} for f in res.fetchall()]
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.post("/usuarios/")
+def agregar_usuario(datos: UsuarioNuevo):
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT id_usuario FROM usuarios WHERE username = :u"), {"u": datos.username}).fetchone()
+            if res:
+                return {"Error": "Ese nombre de usuario ya existe."}
+                
+            conn.execute(text("INSERT INTO usuarios (username, password, rol) VALUES (:u, :p, :r)"),
+                         {"u": datos.username, "p": datos.password, "r": datos.rol})
+            conn.commit()
+            return {"mensaje": "Usuario creado exitosamente"}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.delete("/usuarios/{id_usuario}")
+def eliminar_usuario(id_usuario: int):
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT COUNT(*) FROM usuarios WHERE rol = 'Administrador / Dueño'")).fetchone()
+            usu = conn.execute(text("SELECT rol FROM usuarios WHERE id_usuario = :id"), {"id": id_usuario}).fetchone()
+            
+            if usu and usu[0] == 'Administrador / Dueño' and res[0] <= 1:
+                return {"Error": "No puedes eliminar al único administrador del sistema."}
+                
+            conn.execute(text("DELETE FROM usuarios WHERE id_usuario = :id"), {"id": id_usuario})
+            conn.commit()
+            return {"mensaje": "Usuario eliminado."}
+    except Exception as e:
+        return {"Error": str(e)}
+
+# --- EL RESTO DE TUS RUTAS (CLIENTES, PRODUCTOS, ETC) ---
 @app.get("/clientes/")
 def ver_clientes():
     try:
@@ -330,7 +395,6 @@ def ver_reportes(periodo: str = "General"):
     except Exception as e:
         return {"Error": str(e)}
 
-# --- ¡NUEVO: MOTOR PARA EL RANKING DE PRODUCTOS! ---
 @app.get("/reportes/top-productos")
 def top_productos(limite: int = 10):
     try:

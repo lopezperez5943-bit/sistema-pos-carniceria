@@ -29,22 +29,21 @@ if not st.session_state.logged_in:
         
         with st.form("login_form"):
             usuario = st.text_input("👤 Nombre de Usuario:")
-            password = st.text_input("🔑 PIN de Seguridad:", type="password")
+            password = st.text_input("🔑 Contraseña o PIN:", type="password")
             submit = st.form_submit_button("🚀 Iniciar Sesión", use_container_width=True)
             
             if submit:
-                if usuario == "admin" and password == "1234":
-                    st.session_state.logged_in = True
-                    st.session_state.usuario = "admin"
-                    st.session_state.rol = "Administrador / Dueño"
-                    st.rerun()
-                elif usuario == "cajero" and password == "0000":
-                    st.session_state.logged_in = True
-                    st.session_state.usuario = "cajero"
-                    st.session_state.rol = "Cajero"
-                    st.rerun()
-                else:
-                    st.error("❌ Usuario o PIN incorrectos")
+                try:
+                    res_login = requests.post(f"{API_URL}/login/", json={"username": usuario, "password": password}).json()
+                    if "Error" in res_login:
+                        st.error(res_login["Error"])
+                    else:
+                        st.session_state.logged_in = True
+                        st.session_state.usuario = usuario
+                        st.session_state.rol = res_login["rol"]
+                        st.rerun()
+                except Exception as e:
+                    st.error("Error al conectar con la base de datos.")
 
 else:
     with st.sidebar:
@@ -68,9 +67,8 @@ else:
 
     # --- CONTROL DE SEGURIDAD: PESTAÑAS SEGÚN EL ROL ---
     if st.session_state.rol == "Administrador / Dueño":
-        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes"]
+        nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario", "📦 Compras", "🗑️ Mermas", "💸 Gastos", "🧮 Caja y Reportes", "⚙️ Personal"]
     else:
-        # El cajero solo ve estas 3 pestañas
         nombres_pestanas = ["🛒 Venta", "📒 Clientes", "🥩 Inventario"]
 
     tabs = st.tabs(nombres_pestanas)
@@ -159,6 +157,7 @@ else:
                                 st.markdown("---")
                                 st.markdown("<h2 style='text-align: center;'>🧾 TICKET DE VENTA</h2>", unsafe_allow_html=True)
                                 st.write(f"**Folio:** #{res_ticket['id_venta']} | **Fecha:** {res_ticket['fecha'][:16]}")
+                                st.write(f"**Le atendió:** {st.session_state.usuario}")
                                 st.write(f"**Pagado mediante:** {metodo_pago}")
                                 if metodo_pago == "Fiado":
                                     st.write(f"**Cargado a la cuenta de:** {cli_escogido}")
@@ -183,7 +182,7 @@ else:
         else:
             st.warning("No hay productos registrados en el inventario.")
 
-    # --- 2. LIBRETA DE CLIENTES Y FIADOS (EL CAJERO NO PUEDE BORRAR) ---
+    # --- 2. LIBRETA DE CLIENTES Y FIADOS ---
     with tabs[1]:
         st.header("📒 Libreta de Clientes y Deudores")
         
@@ -238,7 +237,6 @@ else:
                 else:
                     st.info("🏆 ¡Nadie te debe dinero actualmente!")
             
-            # SOLO EL DUEÑO PUEDE BORRAR CLIENTES
             with c2:
                 if st.session_state.rol == "Administrador / Dueño":
                     st.subheader("🗑️ Eliminar Cliente")
@@ -260,7 +258,7 @@ else:
         else:
             st.info("No hay clientes en tu libreta. Agrega uno arriba.")
 
-    # --- 3. INVENTARIO (EL CAJERO SOLO VE, NO EDITA NI BORRA) ---
+    # --- 3. INVENTARIO ---
     with tabs[2]:
         st.header("Catálogo y Existencias")
 
@@ -301,7 +299,6 @@ else:
                     except Exception as e: 
                         st.error("Error de servidor.")
         
-        # SOLO EL DUEÑO PUEDE EDITAR PRECIOS
         if st.session_state.rol == "Administrador / Dueño":
             with st.expander("✏️ Editar Precios de un Producto"):
                 if productos and isinstance(productos, list):
@@ -347,7 +344,6 @@ else:
         if productos and isinstance(productos, list):
             df = pd.DataFrame(productos)
             try:
-                # Si es cajero, NO le mostramos el "precio de compra" para que no sepa cuánto te cuesta la carne a ti.
                 if st.session_state.rol == "Cajero":
                     df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio Público ($)", "stock_actual": "Stock", "codigo_barras": "Cód. Barras"})
                     st.dataframe(df[["id", "Producto", "Cód. Barras", "Categoría", "Precio Público ($)", "Stock"]])
@@ -358,7 +354,6 @@ else:
                 st.dataframe(df)
             
         st.divider()
-        # SOLO EL DUEÑO PUEDE BORRAR PRODUCTOS
         if st.session_state.rol == "Administrador / Dueño":
             st.subheader("⚠️ Eliminar Producto")
             if productos and isinstance(productos, list):
@@ -462,7 +457,7 @@ else:
             except Exception as e: 
                 pass
 
-        # --- 7. CAJA Y REPORTES (CON RANKING) ---
+        # --- 7. CAJA Y REPORTES ---
         with tabs[6]:
             st.header("🧮 Control de Caja y Tablero Financiero")
             
@@ -530,3 +525,51 @@ else:
                     st.info("Aún no hay suficientes ventas registradas para generar el ranking.")
             except Exception as e:
                 pass
+
+        # --- 8. PERSONAL (CONFIGURACIÓN EXCLUSIVA DE ADMINISTRADOR) ---
+        with tabs[7]:
+            st.header("⚙️ Gestión de Personal y Accesos")
+            
+            with st.expander("➕ Dar de alta nuevo cajero o administrador"):
+                with st.form("form_nuevo_usuario"):
+                    n_usuario = st.text_input("Nombre de Usuario (Ej. cajero2):")
+                    n_pass = st.text_input("Contraseña o PIN:", type="password")
+                    n_rol = st.selectbox("Nivel de Acceso:", ["Cajero", "Administrador / Dueño"])
+                    
+                    if st.form_submit_button("Guardar Usuario"):
+                        try:
+                            res_u = requests.post(f"{API_URL}/usuarios/", json={"username": n_usuario, "password": n_pass, "rol": n_rol}).json()
+                            if "Error" in res_u:
+                                st.error(res_u["Error"])
+                            else:
+                                st.success(f"Usuario {n_usuario} creado con éxito.")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error("Error al conectar con la base de datos.")
+            
+            st.subheader("👥 Usuarios Activos")
+            try:
+                usuarios_data = requests.get(f"{API_URL}/usuarios/").json()
+                if usuarios_data and isinstance(usuarios_data, list):
+                    df_u = pd.DataFrame(usuarios_data)
+                    st.dataframe(df_u[["id_usuario", "username", "rol"]], width=600)
+                    
+                    st.divider()
+                    st.subheader("🗑️ Eliminar Usuario")
+                    opciones_del_u = {f"#{u['id_usuario']} - {u['username']} ({u['rol']})": u['id_usuario'] for u in usuarios_data}
+                    usuario_elim = st.selectbox("Selecciona el usuario a borrar:", list(opciones_del_u.keys()))
+                    
+                    if st.button("Eliminar permanentemente"):
+                        try:
+                            res_del_u = requests.delete(f"{API_URL}/usuarios/{opciones_del_u[usuario_elim]}").json()
+                            if "Error" in res_del_u:
+                                st.error(res_del_u["Error"])
+                            else:
+                                st.success("Usuario eliminado del sistema.")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error("Error al conectar con la base de datos.")
+            except Exception as e:
+                st.error("Error al cargar la lista de usuarios.")
