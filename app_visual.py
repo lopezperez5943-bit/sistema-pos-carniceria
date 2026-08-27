@@ -73,11 +73,10 @@ else:
         st.header("🛒 Registrar Venta")
         
         if productos and isinstance(productos, list):
-            # --- LÓGICA DEL LECTOR DE CÓDIGOS DE BARRAS ---
             st.info("💡 **Tip:** Haz clic en la caja de abajo y usa tu pistola lectora para buscar rápido.")
             codigo_escaneado = st.text_input("🔍 Escáner de Código de Barras (Opcional):", value="", key="scanner_venta")
             
-            indice_producto = 0 # Por defecto selecciona el primero de la lista
+            indice_producto = 0
             
             if codigo_escaneado != "":
                 encontrado = False
@@ -94,7 +93,6 @@ else:
             
             opciones_prod = {f"#{p['id']} - {p['nombre']} (Disp: {p['stock_actual']:.3f} KG)": p for p in productos}
             
-            # El selectbox ahora se actualiza automáticamente si el escáner encuentra algo
             prod_seleccionado = st.selectbox("🥩 Selecciona el producto manualmente (o usa el escáner):", list(opciones_prod.keys()), index=indice_producto)
             
             col1, col2 = st.columns(2)
@@ -251,23 +249,22 @@ else:
         else:
             st.info("No hay clientes en tu libreta. Agrega uno arriba.")
 
-    # --- 3. INVENTARIO (CON CÓDIGO DE BARRAS) ---
+    # --- 3. INVENTARIO (CON ALERTAS Y CÓDIGO DE BARRAS) ---
     with tab3:
         st.header("Catálogo y Existencias")
 
         with st.expander("🖨️ Generador de Etiquetas (Códigos de Barras)"):
-                st.write("Crea códigos para imprimir y pegar en productos sin etiqueta (ej. bolsas de carbón o manteca).")
-                codigo_a_generar = st.text_input("Escribe un código inventado (Ej. 101 o 800123):")
-                if codigo_a_generar:
-                    url_barcode = f"https://barcode.tec-it.com/barcode.ashx?data={codigo_a_generar}&code=Code128&translate-esc=true"
-                    st.image(url_barcode, width=250)
-                    st.info("Haz clic derecho en la imagen, selecciona 'Guardar imagen como...', imprímela y pégala en tu bolsa.")  
-
+            st.write("Crea códigos para imprimir y pegar en productos sin etiqueta (ej. bolsas de carbón o manteca).")
+            codigo_a_generar = st.text_input("Escribe un código inventado (Ej. 101 o 800123):")
+            if codigo_a_generar:
+                url_barcode = f"https://barcode.tec-it.com/barcode.ashx?data={codigo_a_generar}&code=Code128&translate-esc=true"
+                st.image(url_barcode, width=250)
+                st.info("Haz clic derecho en la imagen, selecciona 'Guardar imagen como...', imprímela y pégala en tu bolsa.")
+        
         with st.expander("➕ Agregar Nuevo Producto (Con Lector)"):
             with st.form("form_nuevo_producto"):
                 nombre = st.text_input("Nombre del Producto:")
                 categoria = st.selectbox("Categoría:", [("Res", 1), ("Cerdo", 2), ("Pollo", 3), ("Procesados/Abarrotes", 4)], format_func=lambda x: x[0])
-                # ¡NUEVO CAMPO AQUÍ!
                 codigo_barras = st.text_input("Código de Barras (opcional - usa el escáner aquí):")
                 
                 col_c1, col_c2, col_c3 = st.columns(3)
@@ -323,11 +320,21 @@ else:
             else:
                 st.info("Agrega productos primero para poder editarlos.")
 
+        # ¡NUEVO: ALERTAS DE STOCK BAJO!
+        st.divider()
+        st.subheader("🚨 Alertas de Inventario")
+        if productos and isinstance(productos, list):
+            productos_bajos = [p for p in productos if p['stock_actual'] <= 3.0]
+            if productos_bajos:
+                for pb in productos_bajos:
+                    st.error(f"⚠️ **STOCK BAJO:** Te quedan solo {pb['stock_actual']} KG/PZ de **{pb['nombre']}**.")
+            else:
+                st.success("✅ Todo el inventario tiene buen nivel de stock (Más de 3 KG/PZ).")
+
         st.subheader("Existencias Actuales")
         if productos and isinstance(productos, list):
             df = pd.DataFrame(productos)
             try:
-                # Mostramos también la columna del código de barras si la quieres ver
                 df = df.rename(columns={"nombre": "Producto", "categoria": "Categoría", "precio_venta": "Precio ($)", "stock_actual": "Stock", "codigo_barras": "Cód. Barras"})
                 st.dataframe(df[["id", "Producto", "Cód. Barras", "Categoría", "Precio ($)", "Stock"]])
             except Exception as e: 
@@ -430,13 +437,11 @@ else:
         except Exception as e: 
             pass
 
-    # --- 7. CAJA Y REPORTES ---
+    # --- 7. CAJA Y REPORTES (CON RANKING) ---
     with tab7:
         st.header("🧮 Control de Caja y Tablero Financiero")
         
         st.subheader("💵 Turno Actual (Corte de Caja)")
-        st.write("Registra con cuánto dinero abriste la caja hoy para saber cuánto efectivo exacto deberías tener.")
-        
         fondo_inicial = st.number_input("Fondo de caja inicial (Morralla) $:", min_value=0.0, step=50.0, value=500.0)
         
         if st.button("⚖️ Hacer Corte de Caja de HOY", type="primary"):
@@ -488,3 +493,16 @@ else:
                     st.error(f"Error del motor: {res_rep['Error']}")
             except Exception as e: 
                 st.error("Error al generar el reporte histórico.")
+                
+        # ¡NUEVO: RANKING DE PRODUCTOS!
+        st.divider()
+        st.subheader("🏆 Ranking de Productos Más Vendidos")
+        try:
+            res_top = requests.get(f"{API_URL}/reportes/top-productos").json()
+            if res_top and isinstance(res_top, list) and len(res_top) > 0 and "Error" not in res_top[0]:
+                df_top = pd.DataFrame(res_top)
+                st.bar_chart(df_top, x="producto", y="total_vendido", color="#FF4B4B")
+            else:
+                st.info("Aún no hay suficientes ventas registradas para generar el ranking.")
+        except Exception as e:
+            pass

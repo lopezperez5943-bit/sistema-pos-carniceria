@@ -23,7 +23,7 @@ class ProductoNuevo(BaseModel):
     precio_venta: float
     stock_actual: float = 0.000 
     unidad_medida: str = "KG"
-    codigo_barras: str = ""  # <--- ¡NUEVO CAMPO!
+    codigo_barras: str = ""
 
 class DetalleVenta(BaseModel):
     id_producto: int
@@ -124,7 +124,6 @@ def registrar_abono(id_cliente: int, datos: AbonoData):
 def agregar_producto(producto: ProductoNuevo):
     try:
         with engine.connect() as conexion:
-            # ¡MODIFICADO PARA GUARDAR CÓDIGO DE BARRAS!
             query = text("""
                 INSERT INTO productos (nombre, id_categoria, precio_compra, precio_venta, stock_actual, unidad_medida, codigo_barras) 
                 VALUES (:nom, :cat, :compra, :venta, :stock, :unidad, :codigo) RETURNING id_producto
@@ -144,7 +143,6 @@ def agregar_producto(producto: ProductoNuevo):
 def ver_productos():
     try:
         with engine.connect() as conexion:
-            # ¡MODIFICADO PARA ENVIAR EL CÓDIGO DE BARRAS A LA PANTALLA!
             res = conexion.execute(text("""
                 SELECT p.id_producto, p.nombre, c.nombre as categoria, p.precio_venta, p.stock_actual, p.precio_compra, p.codigo_barras
                 FROM productos p
@@ -329,5 +327,23 @@ def ver_reportes(periodo: str = "General"):
                 "ganancia_neta": t_ventas_total - t_gastos - t_mermas,
                 "detalle_gastos": [{"categoria": g[1], "monto": float(g[0])} for g in gastos]
             }
+    except Exception as e:
+        return {"Error": str(e)}
+
+# --- ¡NUEVO: MOTOR PARA EL RANKING DE PRODUCTOS! ---
+@app.get("/reportes/top-productos")
+def top_productos(limite: int = 10):
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                SELECT p.nombre, SUM(dv.cantidad) as total_vendido
+                FROM detalle_ventas dv
+                JOIN productos p ON dv.id_producto = p.id_producto
+                GROUP BY p.nombre
+                ORDER BY total_vendido DESC
+                LIMIT :lim
+            """)
+            res = conn.execute(query, {"lim": limite}).fetchall()
+            return [{"producto": f[0], "total_vendido": float(f[1])} for f in res]
     except Exception as e:
         return {"Error": str(e)}
