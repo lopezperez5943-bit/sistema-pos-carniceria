@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from sqlalchemy import create_engine, text
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 # --- 1. CONEXIÓN A LA BASE DE DATOS EN LA NUBE (NEON) ---
 URL_BASE_DATOS = "postgresql://neondb_owner:npg_Ycz1MT9nRBtL@ep-patient-term-axk6tdgq-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require"
@@ -31,7 +31,16 @@ class DetalleVenta(BaseModel):
 
 class VentaNueva(BaseModel):
     detalles: List[DetalleVenta]
-    metodo_pago: str = "Efectivo"  # <--- ¡NUEVO CAMPO!
+    metodo_pago: str = "Efectivo"
+    id_cliente: Optional[int] = None  # <--- Para ligar la venta a un cliente
+
+class ClienteNuevo(BaseModel):
+    nombre: str
+    telefono: str = ""
+
+class AbonoData(BaseModel):
+    monto: float
+    metodo_pago: str = "Efectivo"
 
 class MermaNueva(BaseModel):
     id_producto: int
@@ -53,21 +62,69 @@ class PrecioData(BaseModel):
     precio_compra: float
     precio_venta: float
 
+
 # --- 3. RUTAS / ENDPOINTS ---
 
 @app.get("/")
 def probar_conexion():
     return {"Estado": "¡Éxito! Motor de la carnicería operando al 100% en la nube."}
 
-@app.get("/categorias/")
-def ver_categorias():
+# --- NUEVO: LIBRETA DE CLIENTES Y FIADOS ---
+@app.get("/clientes/")
+def ver_clientes():
     try:
-        with engine.connect() as conexion:
-            res = conexion.execute(text("SELECT id_categoria, nombre FROM categorias"))
-            return [{"id": fila[0], "nombre": fila[1]} for fila in res.fetchall()]
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT id_cliente, nombre, telefono, deuda_total FROM clientes ORDER BY nombre ASC"))
+            return [{"id": f[0], "nombre": f[1], "telefono": f[2], "deuda_total": float(f[3])} for f in res.fetchall()]
     except Exception as e:
         return {"Error": str(e)}
 
+@app.post("/clientes/")
+def agregar_cliente(cliente: ClienteNuevo):
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("INSERT INTO clientes (nombre, telefono) VALUES (:nom, :tel)"), 
+                         {"nom": cliente.nombre, "tel": cliente.telefono})
+            conn.commit()
+            return {"mensaje": "Cliente registrado exitosamente."}
+    except Exception as e:
+        return {"Error": str(e)}
+
+@app.delete("/clientes/{id_cliente}")
+def eliminar_cliente(id_cliente: int):
+    try:
+        with engine.connect() as conn:
+            # 🛡️ Seguro antibobadas: Verificar que no deba dinero
+            res = conn.execute(text("SELECT deuda_total FROM clientes WHERE id_cliente = :id"), {"id": id_cliente}).fetchone()
+            if res and res[0] > 0:
+                return {"Error": "Este cliente aún tiene deuda. Debe liquidarla antes de poder eliminarlo."}
+            
+            conn.execute(text("DELETE FROM clientes WHERE id_cliente = :id"), {"id": id_cliente})
+            conn.commit()
+            return {"mensaje": "Cliente eliminado permanentemente."}
+    except Exception as e:
+        return {"Error": "No se pudo eliminar al cliente. Quizá tiene historial de compras ligado."}
+
+@app.post("/clientes/{id_cliente}/abono")
+def registrar_abono(id_cliente: int, datos: AbonoData):
+    try:
+        with engine.connect() as conn:
+            # 1. Restamos la deuda al cliente
+            conn.execute(text("UPDATE clientes SET deuda_total = deuda_total - :monto WHERE id_cliente = :id_c"),
+                         {"monto": datos.monto, "id_c": id_cliente})
+            
+            # 2. Guardamos el dinero como una venta especial para que entre al Corte de Caja
+            conn.execute(text("""
+                INSERT INTO ventas (total, metodo_pago, id_cliente) 
+                VALUES (:monto, :pago, :id_c)
+            """), {"monto": datos.monto, "pago": "Abono " + datos.metodo_pago, "id_c": id_cliente})
+            
+            conn.commit()
+            return {"mensaje": "Abono registrado con éxito"}
+    except Exception as e:
+        return {"Error": str(e)}
+
+# --- EL RESTO DEL SISTEMA ---
 @app.post("/productos/")
 def agregar_producto(producto: ProductoNuevo):
     try:
@@ -148,10 +205,9 @@ def registrar_compra(datos: CompraData):
 def registrar_venta(datos: VentaNueva):
     try:
         with engine.connect() as conn:
-            # ¡MODIFICADO PARA GUARDAR EL MÉTODO DE PAGO!
             res_venta = conn.execute(
-                text("INSERT INTO ventas (total, metodo_pago) VALUES (0, :pago) RETURNING id_venta;"),
-                {"pago": datos.metodo_pago}
+                text("INSERT INTO ventas (total, metodo_pago, id_cliente) VALUES (0, :pago, :cliente) RETURNING id_venta;"),
+                {"pago": datos.metodo_pago, "cliente": datos.id_cliente}
             )
             id_venta = res_venta.scalar()
             total_venta = 0
@@ -178,6 +234,11 @@ def registrar_venta(datos: VentaNueva):
             conn.execute(text("UPDATE ventas SET total = :tot WHERE id_venta = :id_v"), 
                          {"tot": total_venta, "id_v": id_venta})
             
+            # NUEVO: Si fue fiado, sumarle la deuda al cliente
+            if datos.metodo_pago == "Fiado" and datos.id_cliente:
+                conn.execute(text("UPDATE clientes SET deuda_total = deuda_total + :tot WHERE id_cliente = :id_c"),
+                             {"tot": total_venta, "id_c": datos.id_cliente})
+                
             conn.commit()
             return {"mensaje": "Venta exitosa", "id_venta": id_venta}
     except Exception as e:
@@ -200,13 +261,7 @@ def generar_ticket(id_venta: int):
                 return {"Error": "Ticket no encontrado"}
 
             detalles = [{"producto": f[2], "cantidad": float(f[3]), "precio_unitario": float(f[4]), "subtotal": float(f[5])} for f in res]
-
-            return {
-                "id_venta": res[0][0],
-                "fecha": str(res[0][1]),
-                "total": float(res[0][6]),
-                "detalles": detalles
-            }
+            return {"id_venta": res[0][0], "fecha": str(res[0][1]), "total": float(res[0][6]), "detalles": detalles}
     except Exception as e:
         return {"Error": str(e)}
 
@@ -214,20 +269,13 @@ def generar_ticket(id_venta: int):
 def registrar_merma(merma: MermaNueva):
     try:
         with engine.connect() as conexion:
-            query_merma = text("""
-                INSERT INTO mermas (id_producto, peso_merma, descripcion)
-                VALUES (:prod, :peso, :desc) RETURNING id_merma
-            """)
-            res = conexion.execute(query_merma, {
-                "prod": merma.id_producto, "peso": merma.peso_merma, "desc": merma.descripcion
-            })
+            res = conexion.execute(text("INSERT INTO mermas (id_producto, peso_merma, descripcion) VALUES (:prod, :peso, :desc) RETURNING id_merma"), 
+                                   {"prod": merma.id_producto, "peso": merma.peso_merma, "desc": merma.descripcion})
             id_m = res.fetchone()[0]
-            
             conexion.execute(text("UPDATE productos SET stock_actual = stock_actual - :peso WHERE id_producto = :prod"), 
                              {"peso": merma.peso_merma, "prod": merma.id_producto})
             conexion.commit()
-            
-        return {"mensaje": "¡Merma registrada!", "id_merma": id_m, "kilos_descontados": merma.peso_merma}
+        return {"mensaje": "¡Merma registrada!", "id_merma": id_m}
     except Exception as e:
         return {"Error": str(e)}
     
@@ -235,17 +283,10 @@ def registrar_merma(merma: MermaNueva):
 def registrar_gasto(gasto: GastoNuevo):
     try:
         with engine.connect() as conexion:
-            query = text("""
-                INSERT INTO gastos (categoria, monto, descripcion)
-                VALUES (:cat, :monto, :desc) RETURNING id_gasto
-            """)
-            res = conexion.execute(query, {
-                "cat": gasto.categoria, 
-                "monto": gasto.monto, 
-                "desc": gasto.descripcion
-            })
+            res = conexion.execute(text("INSERT INTO gastos (categoria, monto, descripcion) VALUES (:cat, :monto, :desc) RETURNING id_gasto"), 
+                                   {"cat": gasto.categoria, "monto": gasto.monto, "desc": gasto.descripcion})
             conexion.commit()
-            return {"mensaje": "Gasto guardado con éxito", "id_gasto": res.fetchone()[0]}
+            return {"mensaje": "Gasto guardado con éxito"}
     except Exception as e:
         return {"Error": str(e)}
 
@@ -270,15 +311,14 @@ def ver_reportes(periodo: str = "General"):
             elif periodo == "Mes":
                 filtro = "WHERE fecha >= CURRENT_DATE - INTERVAL '30 days'"
 
-            # ¡MODIFICADO PARA SEPARAR EFECTIVO DE BANCOS!
             ventas = conexion.execute(text(f"SELECT total, metodo_pago FROM ventas {filtro}")).fetchall()
             gastos = conexion.execute(text(f"SELECT monto, categoria FROM gastos {filtro}")).fetchall()
-            
             filtro_mermas = filtro.replace("fecha", "m.fecha")
             mermas = conexion.execute(text(f"SELECT m.peso_merma, p.precio_compra FROM mermas m JOIN productos p ON m.id_producto = p.id_producto {filtro_mermas}")).fetchall()
             
-            t_ventas_efectivo = sum([float(v[0]) for v in ventas if v[1] == 'Efectivo' or v[1] is None])
-            t_ventas_banco = sum([float(v[0]) for v in ventas if v[1] in ['Tarjeta', 'Transferencia']])
+            # ¡EL DINERO FIADO NO ENTRA A LA CAJA HASTA QUE SE ABONE!
+            t_ventas_efectivo = sum([float(v[0]) for v in ventas if v[1] in ['Efectivo', 'Abono Efectivo'] or v[1] is None])
+            t_ventas_banco = sum([float(v[0]) for v in ventas if v[1] in ['Tarjeta', 'Transferencia', 'Abono Tarjeta', 'Abono Transferencia']])
             t_ventas_total = t_ventas_efectivo + t_ventas_banco
             
             t_gastos = sum([float(g[0]) for g in gastos]) if gastos else 0.0
