@@ -470,7 +470,7 @@ def verificar_turno(usuario: str):
 def abrir_turno(datos: AperturaCajaData):
     try:
         with engine.connect() as conn:
-            conn.execute(text("INSERT INTO turnos_caja (usuario, fondo_inicial, estado) VALUES (:u, :f, 'Abierto')"),
+            conn.execute(text("INSERT INTO turnos_caja (usuario, fondo_inicial, efectivo_esperado, estado) VALUES (:u, :f, :f, 'Abierto')"),
                          {"u": datos.usuario, "f": datos.fondo_inicial})
             conn.commit()
             return {"mensaje": "Turno abierto con éxito"}
